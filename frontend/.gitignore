@@ -1,0 +1,33 @@
+# Node
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated files
+output/*
+!output/.gitkeep
+!output/images/
+!output/pdfs/
+!output/gifs/
+!output/videos/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
