@@ -1,0 +1,120 @@
+{
+  "template_id": "d276abf4-d38b-4d04-9006-5164db7443dd",
+  "version": "1.0",
+  "name": "Generated Reference Template",
+  "canvas": {
+    "width": 2400,
+    "height": 1200,
+    "orientation": "landscape",
+    "aspect_ratio": 2.0
+  },
+  "layout": {
+    "type": "reference-based",
+    "alignment": "reference",
+    "preserve_reference_structure": true
+  },
+  "regions": [
+    {
+      "name": "header",
+      "x": 0,
+      "y": 0,
+      "width": 2400,
+      "height": 216,
+      "order": 1
+    },
+    {
+      "name": "main_visual",
+      "x": 0,
+      "y": 216,
+      "width": 2400,
+      "height": 504,
+      "order": 2
+    },
+    {
+      "name": "content",
+      "x": 0,
+      "y": 720,
+      "width": 2400,
+      "height": 336,
+      "order": 3
+    },
+    {
+      "name": "footer",
+      "x": 0,
+      "y": 1056,
+      "width": 2400,
+      "height": 144,
+      "order": 4
+    }
+  ],
+  "style": {
+    "keywords": [],
+    "dominant_colors": [
+      {
+        "hex": "#E0E0E0",
+        "percentage": 32.07
+      },
+      {
+        "hex": "#E04000",
+        "percentage": 15.88
+      },
+      {
+        "hex": "#000000",
+        "percentage": 4.58
+      },
+      {
+        "hex": "#C0C0E0",
+        "percentage": 3.11
+      },
+      {
+        "hex": "#808080",
+        "percentage": 2.6
+      }
+    ],
+    "average_brightness": 166.2,
+    "preserve_reference_colors": true
+  },
+  "content": {
+    "keywords": [],
+    "source_prompt": ""
+  },
+  "reference_analysis": {
+    "width": 2400,
+    "height": 1200,
+    "format": "PNG",
+    "mode": "RGB",
+    "canvas": {
+      "width": 2400,
+      "height": 1200,
+      "aspect_ratio": 2.0,
+      "orientation": "landscape"
+    },
+    "dominant_colors": [
+      {
+        "hex": "#E0E0E0",
+        "percentage": 32.07
+      },
+      {
+        "hex": "#E04000",
+        "percentage": 15.88
+      },
+      {
+        "hex": "#000000",
+        "percentage": 4.58
+      },
+      {
+        "hex": "#C0C0E0",
+        "percentage": 3.11
+      },
+      {
+        "hex": "#808080",
+        "percentage": 2.6
+      }
+    ],
+    "average_brightness": 166.2
+  },
+  "source": {
+    "type": "reference-image",
+    "filename": "banner.png"
+  }
+}

@@ -1,32 +1,72 @@
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+# Objectives Image Generator
+* Generate image from reference image
+* Use reference image as template and generate image from source text
+* Use reference image as template and generate image from source another image
+* Generate PDF (Slides) from reference images / PDF  from source text
+* Generate PDF (Slides) from reference images / PDF  from source another pdf
+* Use reference gif/mp4 as template and generate gif/mp4 from source text
+* Use reference gif/mp4 as template and generate gif/mp4 from source another images/gif/mp4
+ 
+## UI
+### Add Reference Props
+* Images
+* GIFs
+* PDF
+* Youtube Links
+ 
+### Build Templates
+* Parts of an image
+* Layouts (sizes, colors)
+* Look and feel
+ 
+### Template to Content
+* Text + Templates = Output
+* Reference Image + Templates = Output
+ 
+### Template to Canva
+ 
+### Canva to Content
+# Objectives Image Generator
+* Generate image from reference image
+* Use reference image as template and generate image from source text
+* Use reference image as template and generate image from source another image
+* Generate PDF (Slides) from reference images / PDF  from source text
+* Generate PDF (Slides) from reference images / PDF  from source another pdf
+* Use reference gif/mp4 as template and generate gif/mp4 from source text
+* Use reference gif/mp4 as template and generate gif/mp4 from source another images/gif/mp4
+ 
+## UI
+### Add Reference Props
+* Images
+* GIFs
+* PDF
+* Youtube Links
+* Image Link
+ 
+### Build Templates
+* Parts of an image
+* Layouts (sizes, colors)
+* Look and feel
+ 
+### Template to Content
+* Text + Templates = Output
+* Reference Image + Templates = Output
+ 
+### Template to Canva
+ 
+### Canva to Content
+ 
+### site/project-management
+* Code Repo-1
+* project-management Repo-2/folder (MD)
+ 
+```mermaid
+flowchart LR
+    a1[reference-image] --> b[template]
+    a2[prompt-text] --> b[template]
+    b[template] --> d[Image Builder]
+    c[Prompt=Objective] --> d[Image Builder]
+    c1[Canva+MCP] --> d[Image Builder]
+    c2[AI API Key] --> d[Image Builder]
+    d[Image Builder System] --> o[Output in Folder]
 ```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.

@@ -1,0 +1,17 @@
+# Python virtual environment
+backend/.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+.env.*
+
+# Node dependencies
+frontend/node_modules/
+frontend/dist/
+
+# Generated output
+output/

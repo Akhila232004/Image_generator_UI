@@ -1,0 +1,20 @@
+{
+  "banner.png": {
+    "tag": "Course Details"
+  },
+  "cloud-computing-architecture.png": {
+    "tag": "Cloud Architecture"
+  },
+  "java.jpg": {
+    "tag": "Course Details"
+  },
+  "SQL-server-training.jpg": {
+    "tag": "Database Architecture"
+  },
+  "digital marketing.jpg": {
+    "tag": "Digital Marketing"
+  },
+  "akhila.jpg": {
+    "tag": "Personal Portrait Photography"
+  }
+}
