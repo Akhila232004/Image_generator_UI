@@ -2628,7 +2628,6 @@ function ImageGenerator({
 
                 <div className="reference-file-selector">
 
-
                   <div className="selector-header">
 
                     <div>
@@ -2644,7 +2643,6 @@ function ImageGenerator({
 
                     </div>
 
-
                     {isTaggingImages && (
                       <span className="tagging-status">
                         AI tagging...
@@ -2653,15 +2651,13 @@ function ImageGenerator({
 
                   </div>
 
-
                   {isLoadingInputs ? (
 
                     <div className="reference-loading">
                       Loading images...
                     </div>
 
-                  ) : inputFiles.length ===
-                    0 ? (
+                  ) : inputFiles.length === 0 ? (
 
                     <div className="reference-empty-list">
                       No Google Drive references
@@ -2681,145 +2677,99 @@ function ImageGenerator({
                             : ""
                         }`}
                         onClick={() =>
-                          scrollReferenceList(
-                            "up",
-                          )
+                          scrollReferenceList("up")
                         }
                         aria-label="Scroll reference images up"
                       >
                         ▲
                       </button>
 
-
                       <div
-                        ref={
-                          referenceListRef
-                        }
+                        ref={referenceListRef}
                         className={`reference-file-list ${
                           isReferenceListAtTop ||
                           isReferenceListAtBottom
                             ? "scrollbar-red"
                             : "scrollbar-green"
                         }`}
-                        onScroll={
-                          handleReferenceListScroll
-                        }
+                        onScroll={handleReferenceListScroll}
                       >
 
+                        {inputFiles.map((file) => (
 
-                        {inputFiles.map(
-                          (
-                            file,
-                          ) => (
+                          <label
+                            key={file.id}
+                            className={`reference-file-item ${
+                              selectedInputId === file.id
+                                ? "selected"
+                                : ""
+                            }`}
+                          >
 
-                            <label
-                              key={
-                                file.id
+                            <input
+                              type="checkbox"
+                              checked={selectedInputId === file.id}
+                              onChange={() =>
+                                handleReferenceSelection(file)
                               }
-                              className={`reference-file-item ${
-                                selectedInputId ===
-                                file.id
-                                  ? "selected"
-                                  : ""
-                              }`}
-                            >
+                              aria-label={`Select ${file.name} as reference`}
+                            />
 
+                            <div className="reference-list-thumbnail">
 
-                              <input
-                                type="checkbox"
-                                checked={
-                                  selectedInputId ===
-                                  file.id
+                              <img
+                                src={
+                                  previewUrls[file.id] ||
+                                  resolveApiUrl(file.url)
                                 }
-                                onChange={() =>
-                                  handleReferenceSelection(
-                                    file,
-                                  )
-                                }
-                                aria-label={`Select ${file.name} as reference`}
+                                alt={file.name}
+                                loading="eager"
+                                decoding="async"
+                                onError={(event) => {
+                                  console.error(
+                                    "Reference thumbnail failed:",
+                                    file.name,
+                                    file.url,
+                                  );
+                                  event.currentTarget.style.display =
+                                    "none";
+                                }}
                               />
 
+                            </div>
 
-                              <div className="reference-list-thumbnail">
+                            <div className="reference-list-file-info">
 
-                                <img
-                                  src={
-                                    previewUrls[
-                                      file.id
-                                    ] ||
-                                    resolveApiUrl(
-                                      file.url,
-                                    )
-                                  }
-                                  alt={
-                                    file.name
-                                  }
-                                  loading="eager"
-                                  decoding="async"
-                                  onError={(
-                                    event,
-                                  ) => {
-
-                                    console.error(
-                                      "Reference thumbnail failed:",
-                                      file.name,
-                                      file.url,
-                                    );
-
-
-                                    event.currentTarget.style.display =
-                                      "none";
-                                  }}
-                                />
-
+                              <div className="reference-list-file-name">
+                                {file.name}
                               </div>
 
-
-                              <div className="reference-list-file-info">
-
-
-                                <div className="reference-list-file-name">
-                                  {file.name}
-                                </div>
-
-
-                                <div className="reference-list-file-tag">
-
-                                  {file.tag ||
-                                    (isTaggingImages
-                                      ? "Analyzing image..."
-                                      : file.tagError
-                                        ? "Tagging failed"
-                                        : "Tag unavailable")}
-
-                                </div>
-
-
-                                {file.tagError &&
-                                  !file.tag && (
-                                    <div className="reference-list-file-error">
-                                      {
-                                        file.tagError
-                                      }
-                                    </div>
-                                  )}
-
-
-                                <div className="reference-list-file-meta">
-                                  {
-                                    file.sizeFormatted
-                                  }
-                                </div>
-
+                              <div className="reference-list-file-tag">
+                                {file.tag ||
+                                  (isTaggingImages
+                                    ? "Analyzing image..."
+                                    : file.tagError
+                                      ? "Tagging failed"
+                                      : "Tag unavailable")}
                               </div>
 
-                            </label>
+                              {file.tagError && !file.tag && (
+                                <div className="reference-list-file-error">
+                                  {file.tagError}
+                                </div>
+                              )}
 
-                          ),
-                        )}
+                              <div className="reference-list-file-meta">
+                                {file.sizeFormatted}
+                              </div>
+
+                            </div>
+
+                          </label>
+
+                        ))}
 
                       </div>
-
 
                       <button
                         type="button"
@@ -2829,9 +2779,7 @@ function ImageGenerator({
                             : ""
                         }`}
                         onClick={() =>
-                          scrollReferenceList(
-                            "down",
-                          )
+                          scrollReferenceList("down")
                         }
                         aria-label="Scroll reference images down"
                       >
@@ -2844,24 +2792,14 @@ function ImageGenerator({
 
                 </div>
 
-
                 <div className="reference-divider">
-
-                  <span>
-                    or
-                  </span>
-
+                  <span>or</span>
                 </div>
-
 
                 <div
                   className="reference-drop-zone"
-                  onDragOver={(event) =>
-                    event.preventDefault()
-                  }
-                  onDrop={
-                    handleDrop
-                  }
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={handleDrop}
                 >
 
                   <div className="reference-drop-title">
@@ -2873,15 +2811,10 @@ function ImageGenerator({
                     YouTube or image link.
                   </div>
 
-
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={() =>
-                      setShowReferenceModal(
-                        true,
-                      )
-                    }
+                    onClick={() => setShowReferenceModal(true)}
                   >
                     Add Reference
                   </button>
@@ -2892,91 +2825,233 @@ function ImageGenerator({
 
             ) : (
 
-              <>
+              <div className="reference-selected-layout">
 
-                <div className="selected-reference-preview">
+                <div className="reference-selected-list-panel">
 
-                  {
-                    renderReferencePreview(
-                      reference,
-                    )
-                  }
+                  <div className="reference-file-selector reference-file-selector-compact">
 
+                    <div className="selector-header">
 
-                  <div className="reference-type-label">
-                    {
-                      formatReferenceType(
-                        reference.type,
-                      )
-                    }
-                  </div>
+                      <div>
 
+                        <strong>
+                          Reference library
+                        </strong>
 
-                  {reference.tag && (
-                    <div className="reference-ai-tag">
-                      {
-                        reference.tag
-                      }
+                        <span>
+                          Select another image without
+                          leaving the current preview.
+                        </span>
+
+                      </div>
+
+                      <span className="reference-count-pill">
+                        {inputFiles.length} available
+                      </span>
+
                     </div>
-                  )}
 
-                </div>
+                    {isTaggingImages && (
+                      <span className="tagging-status compact-tagging-status">
+                        AI tagging...
+                      </span>
+                    )}
 
+                    {isLoadingInputs ? (
 
-                <div className="selected-reference-info">
+                      <div className="reference-loading">
+                        Loading images...
+                      </div>
 
-                  <div>
+                    ) : inputFiles.length === 0 ? (
 
-                    <strong>
-                      {
-                        reference.name
-                      }
-                    </strong>
+                      <div className="reference-empty-list">
+                        No Google Drive references found.
+                      </div>
 
-                    <span>
-                      {
-                        reference.source ===
-                        "google-drive"
-                          ? "From Google Drive"
-                          : reference.source ===
-                              "input-folder"
-                            ? "Manual upload"
-                            : "External reference"
-                      }
-                    </span>
+                    ) : (
+
+                      <>
+
+                        <button
+                          type="button"
+                          className={`reference-scroll-button reference-scroll-up ${
+                            isReferenceListAtTop
+                              ? "scroll-indicator-top"
+                              : ""
+                          }`}
+                          onClick={() =>
+                            scrollReferenceList("up")
+                          }
+                          aria-label="Scroll reference images up"
+                        >
+                          ▲
+                        </button>
+
+                        <div
+                          ref={referenceListRef}
+                          className={`reference-file-list reference-file-list-compact ${
+                            isReferenceListAtTop ||
+                            isReferenceListAtBottom
+                              ? "scrollbar-red"
+                              : "scrollbar-green"
+                          }`}
+                          onScroll={handleReferenceListScroll}
+                        >
+
+                          {inputFiles.map((file) => (
+
+                            <label
+                              key={file.id}
+                              className={`reference-file-item ${
+                                selectedInputId === file.id
+                                  ? "selected"
+                                  : ""
+                              }`}
+                            >
+
+                              <input
+                                type="checkbox"
+                                checked={selectedInputId === file.id}
+                                onChange={() =>
+                                  handleReferenceSelection(file)
+                                }
+                                aria-label={`Select ${file.name} as reference`}
+                              />
+
+                              <div className="reference-list-thumbnail">
+
+                                <img
+                                  src={
+                                    previewUrls[file.id] ||
+                                    resolveApiUrl(file.url)
+                                  }
+                                  alt={file.name}
+                                  loading="eager"
+                                  decoding="async"
+                                  onError={(event) => {
+                                    console.error(
+                                      "Reference thumbnail failed:",
+                                      file.name,
+                                      file.url,
+                                    );
+                                    event.currentTarget.style.display =
+                                      "none";
+                                  }}
+                                />
+
+                              </div>
+
+                              <div className="reference-list-file-info">
+
+                                <div className="reference-list-file-name">
+                                  {file.name}
+                                </div>
+
+                                <div className="reference-list-file-tag">
+                                  {file.tag ||
+                                    (isTaggingImages
+                                      ? "Analyzing image..."
+                                      : file.tagError
+                                        ? "Tagging failed"
+                                        : "Tag unavailable")}
+                                </div>
+
+                                <div className="reference-list-file-meta">
+                                  {file.sizeFormatted}
+                                </div>
+
+                              </div>
+
+                            </label>
+
+                          ))}
+
+                        </div>
+
+                        <button
+                          type="button"
+                          className={`reference-scroll-button reference-scroll-down ${
+                            isReferenceListAtBottom
+                              ? "scroll-indicator-bottom"
+                              : ""
+                          }`}
+                          onClick={() =>
+                            scrollReferenceList("down")
+                          }
+                          aria-label="Scroll reference images down"
+                        >
+                          ▼
+                        </button>
+
+                      </>
+
+                    )}
 
                   </div>
-
 
                   <button
                     type="button"
-                    className="secondary-button"
-                    onClick={
-                      handleRemoveReference
-                    }
+                    className="change-reference-button compact-change-reference"
+                    onClick={() => setShowReferenceModal(true)}
                   >
-                    Remove
+                    + Add / Upload Reference
                   </button>
 
                 </div>
 
+                <div className="reference-selected-preview-panel">
 
-                <button
-                  type="button"
-                  className="change-reference-button"
-                  onClick={() =>
-                    setShowReferenceModal(
-                      true,
-                    )
-                  }
-                >
-                  Change Reference
-                </button>
+                  <div className="selected-reference-preview">
 
-              </>
+                    {renderReferencePreview(reference)}
+
+                    <div className="reference-type-label">
+                      {formatReferenceType(reference.type)}
+                    </div>
+
+                    {reference.tag && (
+                      <div className="reference-ai-tag">
+                        {reference.tag}
+                      </div>
+                    )}
+
+                  </div>
+
+                  <div className="selected-reference-info">
+
+                    <div>
+
+                      <strong>
+                        {reference.name}
+                      </strong>
+
+                      <span>
+                        {reference.source === "google-drive"
+                          ? "From Google Drive"
+                          : reference.source === "input-folder"
+                            ? "Manual upload"
+                            : "External reference"}
+                      </span>
+
+                    </div>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleRemoveReference}
+                    >
+                      Remove
+                    </button>
+
+                  </div>
+
+                </div>
+
+              </div>
 
             )}
-
 
             {error && (
               <div className="error-message">
