@@ -8,12 +8,41 @@ export interface ReferenceForTemplate {
     | "image-link";
 
   name: string;
+
+  /*
+   * Browser preview URL.
+   *
+   * This may be:
+   *   - a backend URL
+   *   - an external HTTPS URL
+   *   - a browser blob URL
+   *
+   * It is NOT necessarily the value sent to the backend.
+   */
   url: string;
 
   source?:
     | "input-folder"
     | "external-url"
-    | "upload";
+    | "upload"
+    | "google-drive";
+
+  /*
+   * Real backend source.
+   *
+   * Google Drive:
+   *   Drive file ID
+   *
+   * Manual upload:
+   *   stored filename
+   *
+   * Input folder:
+   *   filename
+   *
+   * External URL / YouTube:
+   *   actual HTTP/HTTPS URL
+   */
+  sourceId?: string;
 
   mimeType?: string;
 }
@@ -121,15 +150,41 @@ const API_BASE_URL =
   "http://localhost:8000";
 
 
+type BackendSourceType =
+  | "input-folder"
+  | "google-drive"
+  | "upload"
+  | "external-url"
+  | "youtube";
+
+
+/**
+ * Return the source type expected by FastAPI.
+ *
+ * The important distinction is that Google Drive is its own backend
+ * source type. Previously it fell through to "external-url", which
+ * caused FastAPI to validate a browser blob URL as HTTP/HTTPS.
+ */
 function getSourceType(
   reference: ReferenceForTemplate,
-):
-  | "input-folder"
-  | "external-url"
-  | "youtube" {
+): BackendSourceType {
 
   if (reference.type === "youtube") {
     return "youtube";
+  }
+
+  if (
+    reference.source ===
+    "google-drive"
+  ) {
+    return "google-drive";
+  }
+
+  if (
+    reference.source ===
+    "upload"
+  ) {
+    return "upload";
   }
 
   if (
@@ -143,18 +198,84 @@ function getSourceType(
 }
 
 
+/**
+ * Return the REAL backend source.
+ *
+ * Never send a browser blob URL to FastAPI.
+ */
 function getSource(
   reference: ReferenceForTemplate,
 ): string {
 
+  const sourceType =
+    getSourceType(reference);
+
   if (
-    reference.source ===
-    "input-folder"
+    sourceType ===
+    "google-drive"
   ) {
-    return reference.name;
+    const driveFileId =
+      reference.sourceId?.trim();
+
+    if (!driveFileId) {
+      throw new Error(
+        "Google Drive reference ID is missing.",
+      );
+    }
+
+    return driveFileId;
   }
 
-  return reference.url;
+  if (
+    sourceType ===
+      "upload" ||
+    sourceType ===
+      "input-folder"
+  ) {
+    const filename =
+      (
+        reference.sourceId ||
+        reference.name
+      ).trim();
+
+    if (!filename) {
+      throw new Error(
+        "Uploaded reference filename is missing.",
+      );
+    }
+
+    return filename;
+  }
+
+  /*
+   * External URL / YouTube.
+   *
+   * sourceId is preferred because `url` can be a browser preview URL
+   * in other reference flows.
+   */
+  const externalSource =
+    (
+      reference.sourceId ||
+      reference.url
+    ).trim();
+
+  if (!externalSource) {
+    throw new Error(
+      "Reference source is missing.",
+    );
+  }
+
+  if (
+    !/^https?:\/\//i.test(
+      externalSource,
+    )
+  ) {
+    throw new Error(
+      "A valid HTTP or HTTPS URL is required.",
+    );
+  }
+
+  return externalSource;
 }
 
 
@@ -174,7 +295,11 @@ function getErrorMessage(
     message?: unknown;
   };
 
-  if (Array.isArray(errorData.detail)) {
+  if (
+    Array.isArray(
+      errorData.detail,
+    )
+  ) {
 
     const messages =
       errorData.detail
@@ -218,8 +343,12 @@ function getErrorMessage(
         })
         .filter(Boolean);
 
-    if (messages.length > 0) {
-      return messages.join(" | ");
+    if (
+      messages.length > 0
+    ) {
+      return messages.join(
+        " | ",
+      );
     }
   }
 
@@ -245,21 +374,18 @@ export async function generateTemplate(
   reference: ReferenceForTemplate,
 ): Promise<GenerateTemplateResponse> {
 
+  const sourceType =
+    getSourceType(reference);
+
   const source =
     getSource(reference);
-
-  if (!source) {
-    throw new Error(
-      "Reference source is missing.",
-    );
-  }
 
   const formData =
     new FormData();
 
   formData.append(
     "source_type",
-    getSourceType(reference),
+    sourceType,
   );
 
   formData.append(
@@ -273,7 +399,9 @@ export async function generateTemplate(
       "reference",
   );
 
-  if (reference.mimeType) {
+  if (
+    reference.mimeType
+  ) {
     formData.append(
       "content_type",
       reference.mimeType,
@@ -320,7 +448,9 @@ export async function generateTemplate(
         GenerateTemplateResponse;
     };
 
-  if (!responseData.template) {
+  if (
+    !responseData.template
+  ) {
     throw new Error(
       "Template service returned an empty template.",
     );

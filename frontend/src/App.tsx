@@ -9,15 +9,34 @@ import type {
   DragEvent,
   UIEvent,
 } from "react";
+
 import "./App.css";
+
 import { generateTemplate } from "./services/templateService";
 import { generatePrompt } from "./services/promptService";
+
 import type {
   GenerateTemplateResponse,
 } from "./services/templateService";
 
 
 const API_BASE_URL = "http://localhost:8000";
+
+
+function resolveApiUrl(url: string): string {
+  if (!url) {
+    return "";
+  }
+
+  if (
+    /^https?:\/\//i.test(url) ||
+    url.startsWith("blob:")
+  ) {
+    return url;
+  }
+
+  return `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+}
 
 
 type ReferenceType =
@@ -38,6 +57,11 @@ interface InputFile {
   sizeFormatted: string;
   url: string;
   tag?: string;
+  tagError?: string;
+  source?:
+    | "google-drive"
+    | "manual-upload"
+    | "input-folder";
 }
 
 
@@ -47,7 +71,17 @@ interface ReferenceData {
   url: string;
   size?: number;
   mimeType?: string;
-  source?: "input-folder" | "external-url" | "upload";
+  source?:
+    | "input-folder"
+    | "external-url"
+    | "upload"
+    | "google-drive";
+  /*
+   * Backend source is kept separate from the browser preview URL.
+   * For Google Drive this is the Drive file ID. For uploaded files it
+   * is the backend filename. Never send a browser blob URL to FastAPI.
+   */
+  sourceId?: string;
   tag?: string;
 }
 
@@ -106,6 +140,7 @@ function isYouTubeUrl(url: string): boolean {
 function isImageUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
+
     const pathname =
       parsed.pathname.toLowerCase();
 
@@ -150,7 +185,646 @@ function formatReferenceType(
 }
 
 
-function ImageGenerator() {
+interface ApiKeyOption {
+  id: string;
+  name: string;
+  keyName: string;
+}
+
+
+interface ApiKeySetupProps {
+  onComplete: (
+    selectedKeys: string[],
+  ) => void;
+}
+
+
+function ApiKeySetup({
+  onComplete,
+}: ApiKeySetupProps) {
+  const [apiFile, setApiFile] =
+    useState<File | null>(null);
+
+  const [apiKeys, setApiKeys] =
+    useState<ApiKeyOption[]>([]);
+
+  const [selectedKeys, setSelectedKeys] =
+    useState<string[]>([]);
+
+  const [isUploading, setIsUploading] =
+    useState(false);
+
+  const [isSaving, setIsSaving] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const apiFileInputRef =
+    useRef<HTMLInputElement | null>(null);
+
+
+  async function handleApiFile(
+    file: File,
+  ) {
+    setApiFile(file);
+    setApiKeys([]);
+    setSelectedKeys([]);
+    setError("");
+    setIsUploading(true);
+
+    try {
+      const formData =
+        new FormData();
+
+      formData.append(
+        "file",
+        file,
+      );
+
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/api-keys/upload`,
+          {
+            method: "POST",
+            body: formData,
+          },
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to read the API keys file.",
+          ),
+        );
+      }
+
+      const rawKeys:
+        ApiKeyOption[] =
+        Array.isArray(data?.keys)
+          ? data.keys
+          : [];
+
+
+      /*
+       * The backend already groups aliases such as
+       * GEMINI_API_KEY and GOOGLE_API_KEY into one
+       * logical service.
+       *
+       * Keep a frontend guard as well so duplicate
+       * service names can never appear in the setup UI.
+       */
+
+      const seenServices =
+        new Set<string>();
+
+      const keys =
+        rawKeys.filter(
+          (api) => {
+            const serviceName =
+              api.name
+                .trim()
+                .toLowerCase();
+
+            if (
+              seenServices.has(
+                serviceName,
+              )
+            ) {
+              return false;
+            }
+
+            seenServices.add(
+              serviceName,
+            );
+
+            return true;
+          },
+        );
+
+
+      if (!keys.length) {
+        throw new Error(
+          "No supported API keys were found in the uploaded file.",
+        );
+      }
+
+      setApiKeys(keys);
+
+    } catch (err) {
+      console.error(
+        "API key file processing failed:",
+        err,
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to read the API keys file.",
+      );
+
+      setApiFile(null);
+
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+
+  function toggleApiKey(
+    keyId: string,
+  ) {
+    setSelectedKeys(
+      (current) =>
+        current.includes(keyId)
+          ? current.filter(
+              (id) =>
+                id !== keyId,
+            )
+          : [
+              ...current,
+              keyId,
+            ],
+    );
+  }
+
+
+  async function handleContinue() {
+    if (!selectedKeys.length) {
+      setError(
+        "Select at least one API before continuing.",
+      );
+
+      return;
+    }
+
+    setError("");
+    setIsSaving(true);
+
+    try {
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/api-keys/select`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              selected_ids:
+                selectedKeys,
+            }),
+          },
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to activate the selected APIs.",
+          ),
+        );
+      }
+
+      onComplete(
+        selectedKeys,
+      );
+
+    } catch (err) {
+      console.error(
+        "API selection failed:",
+        err,
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to activate the selected APIs.",
+      );
+
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+
+  return (
+    <div className="api-setup-shell">
+
+      <div className="api-setup-card">
+
+        <div className="api-setup-header">
+
+          <div className="api-setup-mark">
+            ✦
+          </div>
+
+          <div>
+
+            <div className="api-setup-kicker">
+              INITIAL SETUP
+            </div>
+
+            <h1>
+              Connect your API keys
+            </h1>
+
+            <p>
+              Upload your API configuration
+              file from your desktop. The file
+              is processed by the backend and is
+              not saved in the project.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div className="api-setup-flow">
+
+          <div className="api-setup-step active">
+
+            <span>
+              01
+            </span>
+
+            <div>
+              <strong>
+                Upload API Keys File
+              </strong>
+
+              <small>
+                Choose the API configuration
+                file from your desktop.
+              </small>
+            </div>
+
+          </div>
+
+
+          <div className="api-setup-connector" />
+
+
+          <div
+            className={`api-setup-step ${
+              apiKeys.length
+                ? "active"
+                : ""
+            }`}
+          >
+
+            <span>
+              02
+            </span>
+
+            <div>
+
+              <strong>
+                Select APIs
+              </strong>
+
+              <small>
+                Choose the services to activate.
+              </small>
+
+            </div>
+
+          </div>
+
+
+          <div className="api-setup-connector" />
+
+
+          <div
+            className={`api-setup-step ${
+              selectedKeys.length
+                ? "active"
+                : ""
+            }`}
+          >
+
+            <span>
+              03
+            </span>
+
+            <div>
+
+              <strong>
+                Open Workspace
+              </strong>
+
+              <small>
+                Open the Image Generator.
+              </small>
+
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <div className="api-setup-body">
+
+          <div className="api-upload-panel">
+
+            <input
+              ref={apiFileInputRef}
+              type="file"
+              hidden
+              accept=".env,.txt,.json"
+              onChange={(event) => {
+                const file =
+                  event.target.files?.[0];
+
+                if (file) {
+                  void handleApiFile(file);
+                }
+
+                event.target.value = "";
+              }}
+            />
+
+
+            <button
+              type="button"
+              className="api-upload-button"
+              onClick={() =>
+                apiFileInputRef.current?.click()
+              }
+              disabled={isUploading}
+            >
+
+              <span className="api-upload-icon">
+                ↑
+              </span>
+
+              <span>
+
+                <strong>
+                  {isUploading
+                    ? "Reading API file..."
+                    : "Upload API Keys File"}
+                </strong>
+
+                <small>
+                  .env, .txt or .json
+                </small>
+
+              </span>
+
+            </button>
+
+
+            {apiFile &&
+              !isUploading && (
+                <div className="api-uploaded-file">
+
+                  <span className="api-file-check">
+                    ✓
+                  </span>
+
+                  <div>
+
+                    <strong>
+                      {apiFile.name}
+                    </strong>
+
+                    <small>
+                      API configuration loaded
+                    </small>
+
+                  </div>
+
+                </div>
+              )}
+
+          </div>
+
+
+          <div className="api-selection-panel">
+
+            <div className="api-selection-heading">
+
+              <div>
+
+                <span>
+                  AVAILABLE APIs
+                </span>
+
+                <strong>
+                  Select API services
+                </strong>
+
+              </div>
+
+              {apiKeys.length > 0 && (
+                <small>
+                  {selectedKeys.length} selected
+                </small>
+              )}
+
+            </div>
+
+
+            {isUploading ? (
+
+              <div className="api-setup-empty">
+
+                <div className="api-setup-loader" />
+
+                <strong>
+                  Reading API configuration
+                </strong>
+
+                <span>
+                  Detecting available API services.
+                </span>
+
+              </div>
+
+            ) : apiKeys.length === 0 ? (
+
+              <div className="api-setup-empty">
+
+                <div className="api-setup-empty-icon">
+                  ◇
+                </div>
+
+                <strong>
+                  Upload a file to continue
+                </strong>
+
+                <span>
+                  API values stay hidden. Only API
+                  service names will be displayed.
+                </span>
+
+              </div>
+
+            ) : (
+
+              <div className="api-key-list">
+
+                {apiKeys.map(
+                  (api) => (
+
+                    <label
+                      key={api.id}
+                      className={`api-key-option ${
+                        selectedKeys.includes(
+                          api.id,
+                        )
+                          ? "selected"
+                          : ""
+                      }`}
+                    >
+
+                      <input
+                        type="checkbox"
+                        checked={selectedKeys.includes(
+                          api.id,
+                        )}
+                        onChange={() =>
+                          toggleApiKey(
+                            api.id,
+                          )
+                        }
+                      />
+
+                      <span className="api-key-service-icon">
+                        {api.name
+                          .charAt(0)
+                          .toUpperCase()}
+                      </span>
+
+                      <span className="api-key-service-text">
+
+                        <strong>
+                          {api.name}
+                        </strong>
+
+                        <small>
+                          {api.name ===
+                          "Google Drive API"
+                            ? "OAuth access available"
+                            : "API credential detected"}
+                        </small>
+
+                      </span>
+
+                      <span className="api-key-state">
+                        {selectedKeys.includes(
+                          api.id,
+                        )
+                          ? "Selected"
+                          : "Select"}
+                      </span>
+
+                    </label>
+
+                  ),
+                )}
+
+              </div>
+
+            )}
+
+          </div>
+
+        </div>
+
+
+        {error && (
+          <div className="api-setup-error">
+            {error}
+          </div>
+        )}
+
+
+        <div className="api-setup-footer">
+
+          <div className="api-security-note">
+
+            <span>
+              ✓
+            </span>
+
+            <div>
+
+              <strong>
+                API values are never displayed
+              </strong>
+
+              <small>
+                Only API service names appear
+                in the selection list.
+              </small>
+
+            </div>
+
+          </div>
+
+
+          <button
+            type="button"
+            className="api-continue-button"
+            disabled={
+              !apiKeys.length ||
+              !selectedKeys.length ||
+              isSaving
+            }
+            onClick={
+              handleContinue
+            }
+          >
+
+            {isSaving
+              ? "Activating..."
+              : "Continue to Image Generator"}
+
+            <span>
+              →
+            </span>
+
+          </button>
+
+        </div>
+
+      </div>
+
+    </div>
+  );
+}
+
+
+interface ImageGeneratorProps {
+  selectedApiKeys: string[];
+  onBackToApiSetup: () => void;
+}
+
+
+function ImageGenerator({
+  selectedApiKeys,
+  onBackToApiSetup,
+}: ImageGeneratorProps) {
+
+  void selectedApiKeys;
+
+
   const [inputFiles, setInputFiles] =
     useState<InputFile[]>([]);
 
@@ -173,13 +847,17 @@ function ImageGenerator() {
     useState("");
 
   const [promptMode, setPromptMode] =
-    useState<"manual" | "ai">("manual");
+    useState<"manual" | "ai">(
+      "manual",
+    );
 
   const [isGeneratingPrompt, setIsGeneratingPrompt] =
     useState(false);
 
   const [templateResult, setTemplateResult] =
-    useState<GenerateTemplateResponse | null>(null);
+    useState<GenerateTemplateResponse | null>(
+      null,
+    );
 
   const [isLoadingInputs, setIsLoadingInputs] =
     useState(false);
@@ -190,30 +868,42 @@ function ImageGenerator() {
   const [isGeneratingTemplate, setIsGeneratingTemplate] =
     useState(false);
 
-  const [error, setError] = useState("");
+  const [previewUrls, setPreviewUrls] =
+    useState<Record<string, string>>({});
 
-  const [urlError, setUrlError] = useState("");
+  const [error, setError] =
+    useState("");
+
+  const [urlError, setUrlError] =
+    useState("");
+
 
   const [
     isReferenceListAtTop,
     setIsReferenceListAtTop,
   ] = useState(true);
 
+
   const [
     isReferenceListAtBottom,
     setIsReferenceListAtBottom,
   ] = useState(false);
 
+
   const uploadInputRef =
-    useRef<HTMLInputElement | null>(null);
+    useRef<HTMLInputElement | null>(
+      null,
+    );
 
   const referenceListRef =
-    useRef<HTMLDivElement | null>(null);
+    useRef<HTMLDivElement | null>(
+      null,
+    );
 
 
   /*
    * ------------------------------------------------------------
-   * Load images from backend/input
+   * Load reference images from Google Drive and manual uploads
    * ------------------------------------------------------------
    */
 
@@ -222,51 +912,255 @@ function ImageGenerator() {
     setError("");
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/inputs`,
-      );
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/inputs`,
+        );
 
       if (!response.ok) {
+        const errorData =
+          await response
+            .json()
+            .catch(() => null);
+
         throw new Error(
-          "Unable to load images from backend/input.",
+          String(
+            errorData?.detail ||
+              "Unable to load reference images.",
+          ),
         );
       }
 
-      const data = await response.json();
 
-      const files: InputFile[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.files)
-          ? data.files
-          : [];
+      const data =
+        await response.json();
 
-      const images = files.filter(
-        (file: InputFile) =>
-          file.type === "image" ||
-          file.type === "gif",
+
+      const files: InputFile[] =
+        Array.isArray(data)
+          ? data
+          : Array.isArray(
+              data?.files,
+            )
+            ? data.files
+            : [];
+
+
+      const images =
+        files.filter(
+          (
+            file: InputFile,
+          ) =>
+            file.type ===
+              "image" ||
+            file.type ===
+              "gif",
+        );
+
+
+      setInputFiles(
+        images,
       );
 
-      setInputFiles(images);
+
+      /*
+       * Load the actual image bytes through
+       * the backend and create browser blob URLs.
+       *
+       * This makes Drive previews independent
+       * of browser caching and Google Drive's
+       * response headers.
+       */
+
+      void preloadReferencePreviews(
+        images,
+      );
+
     } catch (err) {
+
       console.error(
         "Loading input files failed:",
         err,
       );
 
+
       setError(
-        "Unable to load images from backend/input.",
+        err instanceof Error
+          ? err.message
+          : "Unable to load reference images.",
       );
 
+
       setInputFiles([]);
+
     } finally {
-      setIsLoadingInputs(false);
+
+      setIsLoadingInputs(
+        false,
+      );
     }
   }
 
 
+  /*
+   * ------------------------------------------------------------
+   * FIX:
+   * Automatically load Google Drive references
+   * when Image Generator opens.
+   * ------------------------------------------------------------
+   */
+
   useEffect(() => {
-    loadInputFiles();
+    void loadInputFiles();
+
+    // Load Google Drive references once when
+    // the workspace opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
+  async function preloadReferencePreviews(
+    files: InputFile[],
+  ) {
+
+    const entries =
+      await Promise.all(
+        files.map(
+          async (
+            file,
+          ) => {
+
+            try {
+
+              const response =
+                await fetch(
+                  resolveApiUrl(
+                    file.url,
+                  ),
+                  {
+                    cache:
+                      "no-store",
+                  },
+                );
+
+
+              if (!response.ok) {
+                throw new Error(
+                  `Preview request failed (${response.status})`,
+                );
+              }
+
+
+              const blob =
+                await response.blob();
+
+
+              if (
+                !blob.size ||
+                !blob.type.startsWith(
+                  "image/",
+                )
+              ) {
+                throw new Error(
+                  "The backend did not return a valid image.",
+                );
+              }
+
+
+              const objectUrl =
+                URL.createObjectURL(
+                  blob,
+                );
+
+
+              return [
+                file.id,
+                objectUrl,
+              ] as const;
+
+            } catch (
+              previewError
+            ) {
+
+              console.error(
+                "Reference preview failed:",
+                file.name,
+                previewError,
+              );
+
+
+              return null;
+            }
+          },
+        ),
+      );
+
+
+    setPreviewUrls(
+      (current) => {
+
+        const next = {
+          ...current,
+        };
+
+
+        entries.forEach(
+          (entry) => {
+
+            if (!entry) {
+              return;
+            }
+
+
+            const [
+              id,
+              url,
+            ] = entry;
+
+
+            if (
+              current[id] &&
+              current[id] !==
+                url
+            ) {
+
+              URL.revokeObjectURL(
+                current[id],
+              );
+            }
+
+
+            next[id] =
+              url;
+          },
+        );
+
+
+        return next;
+      },
+    );
+  }
+
+
+  useEffect(() => {
+
+    return () => {
+
+      Object.values(
+        previewUrls,
+      ).forEach(
+        (url) => {
+
+          URL.revokeObjectURL(
+            url,
+          );
+
+        },
+      );
+
+    };
+
+  }, [previewUrls]);
 
 
   /*
@@ -276,103 +1170,286 @@ function ImageGenerator() {
    */
 
   async function generateInputImageTags(
-    filesToTag: InputFile[] = inputFiles,
+    filesToTag: InputFile[] =
+      inputFiles,
   ) {
+
     if (!filesToTag.length) {
       return;
     }
 
+
     setIsTaggingImages(true);
+    setError("");
+
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/inputs/tag-all`,
-        {
-          method: "POST",
-        },
-      );
+
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/inputs/tag-all`,
+          {
+            method: "POST",
+          },
+        );
+
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
 
       if (!response.ok) {
-        let message =
-          "Unable to generate image tags.";
 
-        try {
-          const errorData =
-            await response.json();
-
-          if (errorData?.detail) {
-            message = String(
-              errorData.detail,
-            );
-          }
-        } catch {
-          // Keep default message.
-        }
-
-        throw new Error(message);
-      }
-
-      const data = await response.json();
-
-      const tagMap: Record<string, string> = {};
-
-      if (Array.isArray(data?.results)) {
-        data.results.forEach(
-          (result: {
-            filename?: string;
-            tag?: string;
-          }) => {
-            if (
-              result.filename &&
-              result.tag
-            ) {
-              tagMap[result.filename] =
-                result.tag;
-            }
-          },
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to generate image tags.",
+          ),
         );
       }
 
-      setInputFiles((currentFiles) =>
-        currentFiles.map((file) => ({
-          ...file,
-          tag:
-            tagMap[file.name] ||
-            file.tag,
-        })),
+
+      const tagMapById:
+        Record<
+          string,
+          string
+        > = {};
+
+
+      const tagMapByFilename:
+        Record<
+          string,
+          string
+        > = {};
+
+
+      const errorMapById:
+        Record<
+          string,
+          string
+        > = {};
+
+
+      if (
+        Array.isArray(
+          data?.results,
+        )
+      ) {
+
+        data.results.forEach(
+          (
+            result: {
+              id?: string;
+              filename?: string;
+              tag?: string;
+            },
+          ) => {
+
+            if (
+              result.tag &&
+              result.id
+            ) {
+
+              tagMapById[
+                result.id
+              ] =
+                result.tag;
+            }
+
+
+            if (
+              result.tag &&
+              result.filename
+            ) {
+
+              tagMapByFilename[
+                result.filename
+              ] =
+                result.tag;
+            }
+
+          },
+        );
+
+      }
+
+
+      if (
+        Array.isArray(
+          data?.errors,
+        )
+      ) {
+
+        data.errors.forEach(
+          (
+            result: {
+              id?: string;
+              filename?: string;
+              error?: string;
+            },
+          ) => {
+
+            const message =
+              String(
+                result.error ||
+                  "Gemini could not generate a tag.",
+              );
+
+
+            if (result.id) {
+
+              errorMapById[
+                result.id
+              ] =
+                message;
+            }
+
+
+            if (
+              result.filename
+            ) {
+
+              errorMapById[
+                `filename:${result.filename}`
+              ] =
+                message;
+            }
+
+          },
+        );
+
+      }
+
+
+      setInputFiles(
+        (currentFiles) =>
+          currentFiles.map(
+            (file) => ({
+              ...file,
+
+              tag:
+                tagMapById[
+                  file.id
+                ] ||
+                tagMapByFilename[
+                  file.name
+                ] ||
+                file.tag,
+
+              tagError:
+                errorMapById[
+                  file.id
+                ] ||
+                errorMapById[
+                  `filename:${file.name}`
+                ],
+            }),
+          ),
       );
 
-      setReference((currentReference) => {
-        if (!currentReference) {
-          return currentReference;
-        }
 
-        const updatedTag =
-          tagMap[currentReference.name];
+      setReference(
+        (currentReference) => {
 
-        if (!updatedTag) {
-          return currentReference;
-        }
+          if (!currentReference) {
+            return currentReference;
+          }
 
-        return {
-          ...currentReference,
-          tag: updatedTag,
-        };
-      });
+
+          const updatedTag =
+            (
+              selectedInputId
+                ? tagMapById[
+                    selectedInputId
+                  ]
+                : undefined
+            ) ||
+            tagMapByFilename[
+              currentReference.name
+            ];
+
+
+          if (!updatedTag) {
+            return currentReference;
+          }
+
+
+          return {
+            ...currentReference,
+            tag: updatedTag,
+          };
+        },
+      );
+
+
+      if (
+        Array.isArray(
+          data?.errors,
+        ) &&
+        data.errors.length >
+          0
+      ) {
+
+        console.error(
+          "Gemini tagging errors:",
+          data.errors,
+        );
+
+
+        const firstError =
+          data.errors[0];
+
+
+        setError(
+          `Image tagging issue: ${String(
+            firstError?.error ||
+              "Gemini could not tag one or more images.",
+          )}`,
+        );
+      }
+
     } catch (err) {
+
       console.error(
         "Image tagging failed:",
         err,
       );
+
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to generate image tags.",
+      );
+
     } finally {
-      setIsTaggingImages(false);
+
+      setIsTaggingImages(
+        false,
+      );
     }
   }
 
 
+  /*
+   * ------------------------------------------------------------
+   * Automatically tag loaded images
+   * ------------------------------------------------------------
+   */
+
   useEffect(() => {
-    if (inputFiles.length > 0) {
-      generateInputImageTags(inputFiles);
+
+    if (
+      inputFiles.length >
+      0
+    ) {
+
+      generateInputImageTags(
+        inputFiles,
+      );
+
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -388,32 +1465,83 @@ function ImageGenerator() {
   function handleReferenceSelection(
     file: InputFile,
   ) {
-    setSelectedInputId(file.id);
-    setTemplatePrompt("");
-    setPromptMode("manual");
+
+    setSelectedInputId(
+      file.id,
+    );
+
+    setTemplatePrompt(
+      "",
+    );
+
+    setPromptMode(
+      "manual",
+    );
+
     setError("");
 
-    const extension = file.name.includes(".")
-      ? `.${file.name
-          .split(".")
-          .pop()
-          ?.toLowerCase()}`
-      : "";
 
-    const selectedReference: ReferenceData = {
-      type: getReferenceType(
-        extension,
+    const extension =
+      file.name.includes(".")
+        ? `.${file.name
+            .split(".")
+            .pop()
+            ?.toLowerCase()}`
+        : "";
+
+
+    const selectedReference:
+      ReferenceData = {
+
+      type:
+        getReferenceType(
+          extension,
+          file.mimeType,
+        ),
+
+      name:
+        file.name,
+
+      url:
+        previewUrls[file.id] ||
+        resolveApiUrl(
+          file.url,
+        ),
+
+      size:
+        file.size,
+
+      mimeType:
         file.mimeType,
-      ),
-      name: file.name,
-      url: `${API_BASE_URL}${file.url}`,
-      size: file.size,
-      mimeType: file.mimeType,
-      source: "input-folder",
-      tag: file.tag,
+
+      source:
+        file.source ===
+        "google-drive"
+          ? "google-drive"
+          : file.source ===
+              "manual-upload"
+            ? "upload"
+            : "input-folder",
+
+      /*
+       * Keep the real backend source separate from `url`.
+       * `url` is allowed to be a blob URL for the browser preview,
+       * but template generation needs the Drive file ID/name.
+       */
+      sourceId:
+        file.source === "google-drive"
+          ? file.id.replace(/^drive:/, "")
+          : file.name,
+
+      tag:
+        file.tag,
     };
 
-    setReference(selectedReference);
+
+    setReference(
+      selectedReference,
+    );
+
 
     void generateTemplateForReference(
       selectedReference,
@@ -428,59 +1556,94 @@ function ImageGenerator() {
    */
 
   function updateReferenceScrollState() {
+
     const element =
       referenceListRef.current;
+
 
     if (!element) {
       return;
     }
 
+
     const atTop =
-      element.scrollTop <= 2;
+      element.scrollTop <=
+      2;
+
 
     const atBottom =
       element.scrollTop +
         element.clientHeight >=
-      element.scrollHeight - 2;
+      element.scrollHeight -
+        2;
 
-    setIsReferenceListAtTop(atTop);
-    setIsReferenceListAtBottom(atBottom);
+
+    setIsReferenceListAtTop(
+      atTop,
+    );
+
+    setIsReferenceListAtBottom(
+      atBottom,
+    );
   }
 
 
   function handleReferenceListScroll(
     event: UIEvent<HTMLDivElement>,
   ) {
+
     const element =
       event.currentTarget;
 
+
     const atTop =
-      element.scrollTop <= 2;
+      element.scrollTop <=
+      2;
+
 
     const atBottom =
       element.scrollTop +
         element.clientHeight >=
-      element.scrollHeight - 2;
+      element.scrollHeight -
+        2;
 
-    setIsReferenceListAtTop(atTop);
-    setIsReferenceListAtBottom(atBottom);
+
+    setIsReferenceListAtTop(
+      atTop,
+    );
+
+    setIsReferenceListAtBottom(
+      atBottom,
+    );
   }
 
 
   function scrollReferenceList(
-    direction: "up" | "down",
+    direction:
+      | "up"
+      | "down",
   ) {
-    if (!referenceListRef.current) {
+
+    if (
+      !referenceListRef.current
+    ) {
       return;
     }
 
-    referenceListRef.current.scrollBy({
-      top:
-        direction === "down"
-          ? 180
-          : -180,
-      behavior: "smooth",
-    });
+
+    referenceListRef.current.scrollBy(
+      {
+        top:
+          direction ===
+          "down"
+            ? 180
+            : -180,
+
+        behavior:
+          "smooth",
+      },
+    );
+
 
     window.setTimeout(
       updateReferenceScrollState,
@@ -503,6 +1666,7 @@ function ImageGenerator() {
   async function handleUploadedFile(
     file: File,
   ) {
+
     const extension =
       file.name.includes(".")
         ? `.${file.name
@@ -511,134 +1675,232 @@ function ImageGenerator() {
             ?.toLowerCase()}`
         : "";
 
-    const type = getReferenceType(
-      extension,
-      file.type,
-    );
+
+    const type =
+      getReferenceType(
+        extension,
+        file.type,
+      );
 
 
     /*
-     * Images and GIFs are uploaded to backend/input.
+     * Images and GIFs are stored as
+     * manual uploads.
+     *
+     * Google Drive remains the primary
+     * reference source.
      */
 
     if (
       type === "image" ||
       type === "gif"
     ) {
+
       setError("");
-      setIsTaggingImages(true);
+      setIsTaggingImages(
+        true,
+      );
+
 
       try {
-        const formData = new FormData();
+
+        const formData =
+          new FormData();
+
 
         formData.append(
           "file",
           file,
         );
 
-        const response = await fetch(
-          `${API_BASE_URL}/api/inputs/upload`,
-          {
-            method: "POST",
-            body: formData,
-          },
-        );
+
+        const response =
+          await fetch(
+            `${API_BASE_URL}/api/inputs/upload`,
+            {
+              method:
+                "POST",
+
+              body:
+                formData,
+            },
+          );
+
 
         const data =
           await response.json();
 
+
         if (!response.ok) {
+
           throw new Error(
             data?.detail ||
               "Unable to upload and tag image.",
           );
         }
 
+
         setSelectedInputId(
           data.id,
         );
 
-        setTemplateResult(null);
 
-        const uploadedReference: ReferenceData = {
+        setTemplateResult(
+          null,
+        );
+
+
+        const uploadedReference:
+          ReferenceData = {
+
           type,
-          name: data.name,
-          url: `${API_BASE_URL}${data.url}`,
-          size: data.size,
+
+          name:
+            data.name,
+
+          url:
+            `${API_BASE_URL}${data.url}`,
+
+          size:
+            data.size,
+
           mimeType:
             data.mimeType ||
             data.mime_type ||
             file.type,
-          source: "input-folder",
-          tag: data.tag,
+
+          source:
+            "upload",
+
+          /*
+           * The upload endpoint stores the image in manual_uploads.
+           * The backend template endpoint expects the stored filename.
+           */
+          sourceId:
+            data.name,
+
+          tag:
+            data.tag,
         };
 
-        setReference(uploadedReference);
+
+        setReference(
+          uploadedReference,
+        );
+
 
         void generateTemplateForReference(
           uploadedReference,
         );
 
+
         await loadInputFiles();
 
-        setShowReferenceModal(false);
-        setShowUrlInput(false);
+
+        setShowReferenceModal(
+          false,
+        );
+
+        setShowUrlInput(
+          false,
+        );
 
       } catch (err) {
+
         console.error(
           "Image upload and Gemini tagging failed:",
           err,
         );
+
 
         setError(
           err instanceof Error
             ? err.message
             : "Unable to upload and tag image.",
         );
+
       } finally {
-        setIsTaggingImages(false);
+
+        setIsTaggingImages(
+          false,
+        );
       }
+
 
       return;
     }
 
 
     /*
-     * Keep PDF/video uploads as local references.
+     * Keep PDF/video uploads
+     * as local references.
      */
 
     const objectUrl =
-      URL.createObjectURL(file);
+      URL.createObjectURL(
+        file,
+      );
 
-    setSelectedInputId("");
-    setTemplateResult(null);
+
+    setSelectedInputId(
+      "",
+    );
+
+    setTemplateResult(
+      null,
+    );
+
     setError("");
+
 
     setReference({
       type,
-      name: file.name,
-      url: objectUrl,
-      size: file.size,
-      mimeType: file.type,
-      source: "upload",
+
+      name:
+        file.name,
+
+      url:
+        objectUrl,
+
+      size:
+        file.size,
+
+      mimeType:
+        file.type,
+
+      source:
+        "upload",
     });
 
-    setShowReferenceModal(false);
-    setShowUrlInput(false);
+
+    setShowReferenceModal(
+      false,
+    );
+
+    setShowUrlInput(
+      false,
+    );
   }
 
 
   function handleFileInputChange(
     event: ChangeEvent<HTMLInputElement>,
   ) {
+
     const file =
       event.target.files?.[0];
 
+
     if (file) {
-      void handleUploadedFile(file);
+
+      void handleUploadedFile(
+        file,
+      );
     }
 
-    event.target.value = "";
+
+    event.target.value =
+      "";
   }
 
 
@@ -651,13 +1913,20 @@ function ImageGenerator() {
   function handleDrop(
     event: DragEvent<HTMLDivElement>,
   ) {
+
     event.preventDefault();
 
+
     const file =
-      event.dataTransfer.files?.[0];
+      event.dataTransfer
+        .files?.[0];
+
 
     if (file) {
-      void handleUploadedFile(file);
+
+      void handleUploadedFile(
+        file,
+      );
     }
   }
 
@@ -669,10 +1938,13 @@ function ImageGenerator() {
    */
 
   function handleExternalUrl() {
+
     const url =
       externalUrl.trim();
 
+
     if (!url) {
+
       setUrlError(
         "Please enter a URL.",
       );
@@ -680,9 +1952,13 @@ function ImageGenerator() {
       return;
     }
 
+
     try {
+
       new URL(url);
+
     } catch {
+
       setUrlError(
         "Please enter a valid URL.",
       );
@@ -690,45 +1966,112 @@ function ImageGenerator() {
       return;
     }
 
+
     setUrlError("");
-    setSelectedInputId("");
-    setTemplateResult(null);
+
+    setSelectedInputId(
+      "",
+    );
+
+    setTemplateResult(
+      null,
+    );
+
     setError("");
 
-    let externalReference: ReferenceData;
 
-    if (isYouTubeUrl(url)) {
-      externalReference = {
-        type: "youtube",
-        name: "YouTube Reference",
+    let externalReference:
+      ReferenceData;
+
+
+    if (
+      isYouTubeUrl(
         url,
-        source: "external-url",
-      };
-    } else if (isImageUrl(url)) {
+      )
+    ) {
+
       externalReference = {
-        type: "image-link",
-        name: "External Image",
+
+        type:
+          "youtube",
+
+        name:
+          "YouTube Reference",
+
         url,
-        source: "external-url",
+
+        source:
+          "external-url",
+
+        sourceId:
+          url,
       };
+
+    } else if (
+      isImageUrl(
+        url,
+      )
+    ) {
+
+      externalReference = {
+
+        type:
+          "image-link",
+
+        name:
+          "External Image",
+
+        url,
+
+        source:
+          "external-url",
+
+        sourceId:
+          url,
+      };
+
     } else {
+
       externalReference = {
-        type: "image-link",
-        name: "External Reference",
+
+        type:
+          "image-link",
+
+        name:
+          "External Reference",
+
         url,
-        source: "external-url",
+
+        source:
+          "external-url",
+
+        sourceId:
+          url,
       };
     }
 
-    setReference(externalReference);
+
+    setReference(
+      externalReference,
+    );
+
 
     void generateTemplateForReference(
       externalReference,
     );
 
-    setExternalUrl("");
-    setShowUrlInput(false);
-    setShowReferenceModal(false);
+
+    setExternalUrl(
+      "",
+    );
+
+    setShowUrlInput(
+      false,
+    );
+
+    setShowReferenceModal(
+      false,
+    );
   }
 
 
@@ -739,20 +2082,41 @@ function ImageGenerator() {
    */
 
   function handleRemoveReference() {
+
     if (
-      reference?.source === "upload" &&
-      reference.url.startsWith("blob:")
+      reference?.source ===
+        "upload" &&
+      reference.url.startsWith(
+        "blob:",
+      )
     ) {
+
       URL.revokeObjectURL(
         reference.url,
       );
     }
 
-    setReference(null);
-    setSelectedInputId("");
-    setTemplatePrompt("");
-    setPromptMode("manual");
-    setTemplateResult(null);
+
+    setReference(
+      null,
+    );
+
+    setSelectedInputId(
+      "",
+    );
+
+    setTemplatePrompt(
+      "",
+    );
+
+    setPromptMode(
+      "manual",
+    );
+
+    setTemplateResult(
+      null,
+    );
+
     setError("");
   }
 
@@ -766,46 +2130,91 @@ function ImageGenerator() {
   async function generateTemplateForReference(
     currentReference: ReferenceData,
   ) {
+
     if (
-      currentReference.type === "pdf" ||
-      currentReference.type === "video"
+      currentReference.type ===
+        "pdf" ||
+      currentReference.type ===
+        "video"
     ) {
-      setTemplateResult(null);
+
+      setTemplateResult(
+        null,
+      );
+
 
       setError(
         "Template generation currently supports images, GIFs and YouTube references.",
       );
 
+
       return;
     }
 
+
     setError("");
-    setIsGeneratingTemplate(true);
-    setTemplateResult(null);
+
+    setIsGeneratingTemplate(
+      true,
+    );
+
+    setTemplateResult(
+      null,
+    );
+
 
     try {
-      const result = await generateTemplate({
-        type: currentReference.type,
-        name: currentReference.name,
-        url: currentReference.url,
-        source: currentReference.source,
-        mimeType: currentReference.mimeType,
-      });
 
-      setTemplateResult(result);
+      const result =
+        await generateTemplate({
+          type:
+            currentReference.type,
+
+          name:
+            currentReference.name,
+
+          /*
+           * `url` is only the browser preview URL.
+           * `sourceId` is the value the backend uses to locate the
+           * actual reference.
+           */
+          url:
+            currentReference.url,
+
+          source:
+            currentReference.source as any,
+
+          sourceId:
+            currentReference.sourceId,
+
+          mimeType:
+            currentReference.mimeType,
+        });
+
+
+      setTemplateResult(
+        result,
+      );
+
     } catch (err) {
+
       console.error(
         "Automatic template generation failed:",
         err,
       );
+
 
       setError(
         err instanceof Error
           ? err.message
           : "Unable to generate template from the reference.",
       );
+
     } finally {
-      setIsGeneratingTemplate(false);
+
+      setIsGeneratingTemplate(
+        false,
+      );
     }
   }
 
@@ -817,7 +2226,9 @@ function ImageGenerator() {
    */
 
   async function handleGeneratePrompt() {
+
     if (!reference) {
+
       setError(
         "Please select a reference first.",
       );
@@ -825,10 +2236,14 @@ function ImageGenerator() {
       return;
     }
 
+
     if (
-      reference.type === "pdf" ||
-      reference.type === "video"
+      reference.type ===
+        "pdf" ||
+      reference.type ===
+        "video"
     ) {
+
       setError(
         "AI prompt generation currently supports images, GIFs, image URLs and YouTube URLs.",
       );
@@ -836,37 +2251,66 @@ function ImageGenerator() {
       return;
     }
 
+
     setError("");
-    setIsGeneratingPrompt(true);
+
+    setIsGeneratingPrompt(
+      true,
+    );
+
 
     try {
+
       const generatedPrompt =
         await generatePrompt({
-          type: reference.type,
-          name: reference.name,
-          url: reference.url,
-          source: reference.source,
-          mimeType: reference.mimeType,
+          type:
+            reference.type,
+
+          name:
+            reference.name,
+
+          url:
+            reference.url,
+
+          source:
+            reference.source as any,
+
+          sourceId:
+            reference.sourceId,
+
+          mimeType:
+            reference.mimeType,
         });
+
 
       setTemplatePrompt(
         generatedPrompt,
       );
 
-      setPromptMode("ai");
+
+      setPromptMode(
+        "ai",
+      );
+
     } catch (err) {
+
       console.error(
         "AI prompt generation failed:",
         err,
       );
+
 
       setError(
         err instanceof Error
           ? err.message
           : "Unable to generate a prompt with AI.",
       );
+
     } finally {
-      setIsGeneratingPrompt(false);
+
+      setIsGeneratingPrompt(
+        false,
+      );
     }
   }
 
@@ -880,17 +2324,21 @@ function ImageGenerator() {
   function renderReferencePreview(
     currentReference: ReferenceData,
   ) {
+
     if (
       currentReference.type ===
       "youtube"
     ) {
+
       return (
         <div className="media-preview youtube-preview">
+
           <div className="youtube-icon">
             ▶
           </div>
 
           <div className="youtube-preview-text">
+
             <strong>
               YouTube Reference
             </strong>
@@ -898,17 +2346,22 @@ function ImageGenerator() {
             <span>
               External video reference
             </span>
+
           </div>
+
         </div>
       );
     }
+
 
     if (
       currentReference.type ===
       "pdf"
     ) {
+
       return (
         <div className="media-preview document-preview">
+
           <div className="document-icon">
             PDF
           </div>
@@ -916,28 +2369,51 @@ function ImageGenerator() {
           <div className="document-name">
             {currentReference.name}
           </div>
+
         </div>
       );
     }
+
 
     if (
       currentReference.type ===
       "video"
     ) {
+
       return (
         <video
-          src={currentReference.url}
+          src={
+            currentReference.url
+          }
           controls
           className="reference-media"
         />
       );
     }
 
+
     return (
       <img
-        src={currentReference.url}
-        alt={currentReference.name}
+        src={
+          currentReference.url
+        }
+        alt={
+          currentReference.name
+        }
         className="reference-media"
+        loading="eager"
+        decoding="async"
+        onError={(event) => {
+
+          console.error(
+            "Reference preview failed:",
+            currentReference.url,
+          );
+
+
+          event.currentTarget.style.display =
+            "none";
+        }}
       />
     );
   }
@@ -951,6 +2427,7 @@ function ImageGenerator() {
 
   return (
     <div className="app-shell">
+
 
       <header className="top-header">
 
@@ -978,12 +2455,36 @@ function ImageGenerator() {
 
         <div className="header-actions">
 
+          <div className="active-api-summary">
+
+            <span>
+              APIs
+            </span>
+
+            <strong>
+              {
+                selectedApiKeys.length
+              }
+            </strong>
+
+          </div>
+
+
+          <button
+            type="button"
+            className="header-button"
+            onClick={onBackToApiSetup}
+          >
+            ← API Setup
+          </button>
+
           <button
             type="button"
             className="header-button"
           >
             Documentation
           </button>
+
 
           <button
             type="button"
@@ -999,6 +2500,7 @@ function ImageGenerator() {
 
 
       <main className="main-content">
+
 
         <section className="hero-section">
 
@@ -1022,6 +2524,7 @@ function ImageGenerator() {
 
         <section className="workflow-section">
 
+
           <div className="workflow-step active">
 
             <span className="workflow-number">
@@ -1034,7 +2537,9 @@ function ImageGenerator() {
 
           </div>
 
+
           <div className="workflow-line" />
+
 
           <div className="workflow-step">
 
@@ -1048,7 +2553,9 @@ function ImageGenerator() {
 
           </div>
 
+
           <div className="workflow-line" />
+
 
           <div className="workflow-step">
 
@@ -1062,7 +2569,9 @@ function ImageGenerator() {
 
           </div>
 
+
           <div className="workflow-line" />
+
 
           <div className="workflow-step">
 
@@ -1081,11 +2590,13 @@ function ImageGenerator() {
 
         <section className="workspace-grid">
 
+
           {/* ====================================================
               REFERENCE
               ==================================================== */}
 
           <article className="workspace-card">
+
 
             <div className="card-header">
 
@@ -1100,6 +2611,7 @@ function ImageGenerator() {
                 </h2>
 
               </div>
+
 
               {reference && (
                 <span className="status-pill">
@@ -1116,6 +2628,7 @@ function ImageGenerator() {
 
                 <div className="reference-file-selector">
 
+
                   <div className="selector-header">
 
                     <div>
@@ -1125,11 +2638,12 @@ function ImageGenerator() {
                       </strong>
 
                       <span>
-                        Choose one image from
-                        backend/input
+                        Choose a reference from
+                        Google Drive or upload manually.
                       </span>
 
                     </div>
+
 
                     {isTaggingImages && (
                       <span className="tagging-status">
@@ -1146,11 +2660,13 @@ function ImageGenerator() {
                       Loading images...
                     </div>
 
-                  ) : inputFiles.length === 0 ? (
+                  ) : inputFiles.length ===
+                    0 ? (
 
                     <div className="reference-empty-list">
-                      No images found in
-                      backend/input.
+                      No Google Drive references
+                      found. You can still add a
+                      manual upload below.
                     </div>
 
                   ) : (
@@ -1190,11 +2706,16 @@ function ImageGenerator() {
                         }
                       >
 
+
                         {inputFiles.map(
-                          (file) => (
+                          (
+                            file,
+                          ) => (
 
                             <label
-                              key={file.id}
+                              key={
+                                file.id
+                              }
                               className={`reference-file-item ${
                                 selectedInputId ===
                                 file.id
@@ -1202,6 +2723,7 @@ function ImageGenerator() {
                                   : ""
                               }`}
                             >
+
 
                               <input
                                 type="checkbox"
@@ -1221,8 +2743,33 @@ function ImageGenerator() {
                               <div className="reference-list-thumbnail">
 
                                 <img
-                                  src={`${API_BASE_URL}${file.url}`}
-                                  alt={file.name}
+                                  src={
+                                    previewUrls[
+                                      file.id
+                                    ] ||
+                                    resolveApiUrl(
+                                      file.url,
+                                    )
+                                  }
+                                  alt={
+                                    file.name
+                                  }
+                                  loading="eager"
+                                  decoding="async"
+                                  onError={(
+                                    event,
+                                  ) => {
+
+                                    console.error(
+                                      "Reference thumbnail failed:",
+                                      file.name,
+                                      file.url,
+                                    );
+
+
+                                    event.currentTarget.style.display =
+                                      "none";
+                                  }}
                                 />
 
                               </div>
@@ -1230,21 +2777,38 @@ function ImageGenerator() {
 
                               <div className="reference-list-file-info">
 
+
                                 <div className="reference-list-file-name">
                                   {file.name}
                                 </div>
+
 
                                 <div className="reference-list-file-tag">
 
                                   {file.tag ||
                                     (isTaggingImages
                                       ? "Analyzing image..."
-                                      : "Tag unavailable")}
+                                      : file.tagError
+                                        ? "Tagging failed"
+                                        : "Tag unavailable")}
 
                                 </div>
 
+
+                                {file.tagError &&
+                                  !file.tag && (
+                                    <div className="reference-list-file-error">
+                                      {
+                                        file.tagError
+                                      }
+                                    </div>
+                                  )}
+
+
                                 <div className="reference-list-file-meta">
-                                  {file.sizeFormatted}
+                                  {
+                                    file.sizeFormatted
+                                  }
                                 </div>
 
                               </div>
@@ -1282,9 +2846,11 @@ function ImageGenerator() {
 
 
                 <div className="reference-divider">
+
                   <span>
                     or
                   </span>
+
                 </div>
 
 
@@ -1293,7 +2859,9 @@ function ImageGenerator() {
                   onDragOver={(event) =>
                     event.preventDefault()
                   }
-                  onDrop={handleDrop}
+                  onDrop={
+                    handleDrop
+                  }
                 >
 
                   <div className="reference-drop-title">
@@ -1304,6 +2872,7 @@ function ImageGenerator() {
                     Upload media or provide a
                     YouTube or image link.
                   </div>
+
 
                   <button
                     type="button"
@@ -1327,19 +2896,27 @@ function ImageGenerator() {
 
                 <div className="selected-reference-preview">
 
-                  {renderReferencePreview(
-                    reference,
-                  )}
+                  {
+                    renderReferencePreview(
+                      reference,
+                    )
+                  }
+
 
                   <div className="reference-type-label">
-                    {formatReferenceType(
-                      reference.type,
-                    )}
+                    {
+                      formatReferenceType(
+                        reference.type,
+                      )
+                    }
                   </div>
+
 
                   {reference.tag && (
                     <div className="reference-ai-tag">
-                      {reference.tag}
+                      {
+                        reference.tag
+                      }
                     </div>
                   )}
 
@@ -1351,14 +2928,21 @@ function ImageGenerator() {
                   <div>
 
                     <strong>
-                      {reference.name}
+                      {
+                        reference.name
+                      }
                     </strong>
 
                     <span>
-                      {reference.source ===
-                      "input-folder"
-                        ? "From backend/input"
-                        : "External reference"}
+                      {
+                        reference.source ===
+                        "google-drive"
+                          ? "From Google Drive"
+                          : reference.source ===
+                              "input-folder"
+                            ? "Manual upload"
+                            : "External reference"
+                      }
                     </span>
 
                   </div>
@@ -1409,6 +2993,7 @@ function ImageGenerator() {
 
           <article className="workspace-card">
 
+
             <div className="card-header">
 
               <div>
@@ -1423,6 +3008,7 @@ function ImageGenerator() {
 
               </div>
 
+
               {templateResult && (
                 <span className="status-pill success">
                   Generated
@@ -1431,16 +3017,22 @@ function ImageGenerator() {
 
             </div>
 
+
             <div className="template-workspace-grid">
+
 
               <div className="template-reference-area">
 
+
                 <div className="template-panel-heading">
+
                   <div className="template-panel-index">
                     01
                   </div>
 
+
                   <div>
+
                     <div className="template-preview-label">
                       REFERENCE
                     </div>
@@ -1450,20 +3042,32 @@ function ImageGenerator() {
                     </h3>
 
                     <p>
-                      The selected reference used to build the template.
+                      The selected reference used to
+                      build the template.
                     </p>
+
                   </div>
+
                 </div>
+
 
                 <div className="template-reference-frame">
 
+
                   {reference ? (
+
                     <div className="fixed-reference-preview">
-                      {renderReferencePreview(
-                        reference,
-                      )}
+
+                      {
+                        renderReferencePreview(
+                          reference,
+                        )
+                      }
+
                     </div>
+
                   ) : (
+
                     <div className="template-no-reference">
 
                       <div className="template-empty-icon">
@@ -1475,46 +3079,70 @@ function ImageGenerator() {
                       </strong>
 
                       <span>
-                        The selected reference will appear here.
+                        The selected reference will
+                        appear here.
                       </span>
 
                     </div>
+
                   )}
 
                 </div>
 
+
                 {reference && (
+
                   <div className="template-reference-meta">
+
 
                     <div className="template-reference-file">
 
                       <span className="template-file-dot" />
 
+
                       <div>
 
                         <strong>
-                          {reference.name}
+                          {
+                            reference.name
+                          }
                         </strong>
 
                         <span>
-                          {reference.source === "external-url"
-                            ? "External reference"
-                            : reference.source === "upload"
-                              ? "Uploaded reference"
-                              : "From backend input folder"}
+
+                          {
+                            reference.source ===
+                            "external-url"
+                              ? "External reference"
+                              : reference.source ===
+                                  "upload"
+                                ? "Uploaded reference"
+                                : reference.source ===
+                                    "google-drive"
+                                  ? "From Google Drive"
+                                  : "Manual upload"
+                          }
+
                         </span>
 
                       </div>
 
                     </div>
 
+
                     <span className="template-reference-type">
-                      {reference.type === "youtube"
-                        ? "YouTube"
-                        : reference.type.toUpperCase()}
+
+                      {
+                        reference.type ===
+                        "youtube"
+                          ? "YouTube"
+                          : reference.type.toUpperCase()
+                      }
+
                     </span>
 
                   </div>
+
                 )}
 
               </div>
@@ -1522,7 +3150,9 @@ function ImageGenerator() {
 
               <div className="generated-template-panel">
 
+
                 <div className="generated-template-panel-header">
+
 
                   <div className="template-panel-heading">
 
@@ -1530,29 +3160,41 @@ function ImageGenerator() {
                       02
                     </div>
 
+
                     <div>
 
                       <div className="template-preview-label">
                         GENERATED TEMPLATE
                       </div>
 
+
                       <h3>
-                        {isGeneratingTemplate
-                          ? "Creating template..."
-                          : templateResult
-                            ? templateResult.template_name
-                            : "Template structure"}
+
+                        {
+                          isGeneratingTemplate
+                            ? "Creating template..."
+                            : templateResult
+                              ? templateResult.template_name
+                              : "Template structure"
+                        }
+
                       </h3>
 
+
                       <p>
-                        {isGeneratingTemplate
-                          ? "Analyzing the reference and extracting its visual structure."
-                          : "A reusable structure generated automatically from the reference."}
+
+                        {
+                          isGeneratingTemplate
+                            ? "Analyzing the reference and extracting its visual structure."
+                            : "A reusable structure generated automatically from the reference."
+                        }
+
                       </p>
 
                     </div>
 
                   </div>
+
 
                   {isGeneratingTemplate && (
                     <span className="template-generating-pill">
@@ -1560,11 +3202,13 @@ function ImageGenerator() {
                     </span>
                   )}
 
-                  {templateResult && !isGeneratingTemplate && (
-                    <span className="status-pill success">
-                      Ready
-                    </span>
-                  )}
+
+                  {templateResult &&
+                    !isGeneratingTemplate && (
+                      <span className="status-pill success">
+                        Ready
+                      </span>
+                    )}
 
                 </div>
 
@@ -1580,7 +3224,9 @@ function ImageGenerator() {
                     </strong>
 
                     <span>
-                      Reading canvas, layout, regions and visual style from the reference.
+                      Reading canvas, layout,
+                      regions and visual style
+                      from the reference.
                     </span>
 
                   </div>
@@ -1591,6 +3237,7 @@ function ImageGenerator() {
 
 
                     <div className="template-structure-section">
+
 
                       <div className="template-structure-heading">
 
@@ -1615,6 +3262,7 @@ function ImageGenerator() {
 
                       <div className="template-overview-grid">
 
+
                         <div className="template-overview-card">
 
                           <span>
@@ -1622,9 +3270,17 @@ function ImageGenerator() {
                           </span>
 
                           <strong>
-                            {templateResult.template.canvas.width}
+
+                            {
+                              templateResult.template.canvas.width
+                            }
+
                             {" × "}
-                            {templateResult.template.canvas.height}
+
+                            {
+                              templateResult.template.canvas.height
+                            }
+
                           </strong>
 
                         </div>
@@ -1637,7 +3293,9 @@ function ImageGenerator() {
                           </span>
 
                           <strong>
-                            {templateResult.template.canvas.orientation}
+                            {
+                              templateResult.template.canvas.orientation
+                            }
                           </strong>
 
                         </div>
@@ -1650,7 +3308,9 @@ function ImageGenerator() {
                           </span>
 
                           <strong>
-                            {templateResult.template.layout.type}
+                            {
+                              templateResult.template.layout.type
+                            }
                           </strong>
 
                         </div>
@@ -1663,7 +3323,9 @@ function ImageGenerator() {
                           </span>
 
                           <strong>
-                            {templateResult.template.layout.alignment}
+                            {
+                              templateResult.template.layout.alignment
+                            }
                           </strong>
 
                         </div>
@@ -1674,6 +3336,7 @@ function ImageGenerator() {
 
 
                     <div className="template-structure-section">
+
 
                       <div className="template-structure-heading">
 
@@ -1698,29 +3361,48 @@ function ImageGenerator() {
 
                       <div className="template-region-flow">
 
-                        {templateResult.template.regions.map(
-                          (region, index) => (
+                        {
+                          templateResult.template.regions.map(
+                            (
+                              region,
+                              index,
+                            ) => (
 
-                            <div
-                              key={`${region.order}-${region.name}`}
-                              className="template-region-node"
-                            >
+                              <div
+                                key={`${region.order}-${region.name}`}
+                                className="template-region-node"
+                              >
 
-                              <span className="template-region-order">
-                                {String(index + 1).padStart(2, "0")}
-                              </span>
+                                <span className="template-region-order">
 
-                              <span className="template-region-name">
-                                {region.name.replaceAll(
-                                  "_",
-                                  " ",
-                                )}
-                              </span>
+                                  {
+                                    String(
+                                      index + 1,
+                                    ).padStart(
+                                      2,
+                                      "0",
+                                    )
+                                  }
 
-                            </div>
+                                </span>
 
-                          ),
-                        )}
+
+                                <span className="template-region-name">
+
+                                  {
+                                    region.name.replaceAll(
+                                      "_",
+                                      " ",
+                                    )
+                                  }
+
+                                </span>
+
+                              </div>
+
+                            ),
+                          )
+                        }
 
                       </div>
 
@@ -1728,6 +3410,7 @@ function ImageGenerator() {
 
 
                     <div className="template-structure-section">
+
 
                       <div className="template-structure-heading">
 
@@ -1752,38 +3435,47 @@ function ImageGenerator() {
 
                       <div className="template-color-list structured">
 
-                        {templateResult.template.style.dominant_colors.map(
-                          (color) => (
+                        {
+                          templateResult.template.style.dominant_colors.map(
+                            (
+                              color,
+                            ) => (
 
-                            <div
-                              key={color.hex}
-                              className="template-color-card"
-                            >
+                              <div
+                                key={
+                                  color.hex
+                                }
+                                className="template-color-card"
+                              >
 
-                              <span
-                                className="template-color-swatch large"
-                                style={{
-                                  backgroundColor:
-                                    color.hex,
-                                }}
-                              />
+                                <span
+                                  className="template-color-swatch large"
+                                  style={{
+                                    backgroundColor:
+                                      color.hex,
+                                  }}
+                                />
 
-                              <div>
 
-                                <strong>
-                                  {color.hex}
-                                </strong>
+                                <div>
 
-                                <span>
-                                  Reference color
-                                </span>
+                                  <strong>
+                                    {
+                                      color.hex
+                                    }
+                                  </strong>
+
+                                  <span>
+                                    Reference color
+                                  </span>
+
+                                </div>
 
                               </div>
 
-                            </div>
-
-                          ),
-                        )}
+                            ),
+                          )
+                        }
 
                       </div>
 
@@ -1792,9 +3484,11 @@ function ImageGenerator() {
 
                     <div className="template-output-note">
 
+
                       <div className="template-output-note-icon">
                         ✓
                       </div>
+
 
                       <div>
 
@@ -1803,10 +3497,11 @@ function ImageGenerator() {
                         </strong>
 
                         <span>
-                          Template structure is generated independently.
-                          The human-written or AI-generated prompt can be
-                          combined with this template in the next Image
-                          Builder step.
+                          Template structure is generated
+                          independently. The human-written
+                          or AI-generated prompt can be
+                          combined with this template in the
+                          next Image Builder step.
                         </span>
 
                       </div>
@@ -1824,12 +3519,14 @@ function ImageGenerator() {
                     </div>
 
                     <strong>
-                      Add a reference to generate a template
+                      Add a reference to generate a
+                      template
                     </strong>
 
                     <span>
-                      The template is created automatically as soon as
-                      a reference is selected.
+                      The template is created
+                      automatically as soon as a
+                      reference is selected.
                     </span>
 
                   </div>
@@ -1843,7 +3540,9 @@ function ImageGenerator() {
 
             <div className="template-prompt-area">
 
+
               <div className="prompt-mode-header">
+
 
                 <label className="input-label">
                   Content Prompt
@@ -1852,9 +3551,11 @@ function ImageGenerator() {
 
                 <div className="prompt-mode-options">
 
+
                   <label
                     className={`prompt-mode-option ${
-                      promptMode === "manual"
+                      promptMode ===
+                      "manual"
                         ? "active"
                         : ""
                     }`}
@@ -1865,11 +3566,17 @@ function ImageGenerator() {
                       name="prompt-mode"
                       value="manual"
                       checked={
-                        promptMode === "manual"
+                        promptMode ===
+                        "manual"
                       }
                       onChange={() => {
-                        setPromptMode("manual");
+
+                        setPromptMode(
+                          "manual",
+                        );
+
                         setError("");
+
                       }}
                     />
 
@@ -1882,7 +3589,8 @@ function ImageGenerator() {
 
                   <label
                     className={`prompt-mode-option ${
-                      promptMode === "ai"
+                      promptMode ===
+                      "ai"
                         ? "active"
                         : ""
                     }`}
@@ -1893,11 +3601,17 @@ function ImageGenerator() {
                       name="prompt-mode"
                       value="ai"
                       checked={
-                        promptMode === "ai"
+                        promptMode ===
+                        "ai"
                       }
                       onChange={() => {
-                        setPromptMode("ai");
+
+                        setPromptMode(
+                          "ai",
+                        );
+
                         setError("");
+
                       }}
                     />
 
@@ -1912,9 +3626,11 @@ function ImageGenerator() {
               </div>
 
 
-              {promptMode === "ai" && (
+              {promptMode ===
+                "ai" && (
 
                 <div className="ai-prompt-panel">
+
 
                   <div className="ai-prompt-panel-text">
 
@@ -1938,16 +3654,22 @@ function ImageGenerator() {
                     disabled={
                       !reference ||
                       isGeneratingPrompt ||
-                      reference.type === "pdf" ||
-                      reference.type === "video"
+                      reference.type ===
+                        "pdf" ||
+                      reference.type ===
+                        "video"
                     }
                     onClick={
                       handleGeneratePrompt
                     }
                   >
-                    {isGeneratingPrompt
-                      ? "Generating Prompt..."
-                      : "Generate Prompt with AI"}
+
+                    {
+                      isGeneratingPrompt
+                        ? "Generating Prompt..."
+                        : "Generate Prompt with AI"
+                    }
+
                   </button>
 
                 </div>
@@ -1958,14 +3680,20 @@ function ImageGenerator() {
               <textarea
                 id="template-prompt"
                 className="template-textarea"
-                value={templatePrompt}
-                onChange={(event) =>
+                value={
+                  templatePrompt
+                }
+                onChange={(
+                  event,
+                ) =>
                   setTemplatePrompt(
-                    event.target.value,
+                    event.target
+                      .value,
                   )
                 }
                 placeholder={
-                  promptMode === "ai"
+                  promptMode ===
+                  "ai"
                     ? "Generated prompt will appear here. You can edit it before sending it to Canva."
                     : "Describe the content you want Canva to generate from the template..."
                 }
@@ -1990,6 +3718,7 @@ function ImageGenerator() {
 
         <section className="full-width-card">
 
+
           <div className="card-header">
 
             <div>
@@ -2004,6 +3733,7 @@ function ImageGenerator() {
 
             </div>
 
+
             <span className="coming-pill">
               Canva + MCP · Coming later
             </span>
@@ -2016,6 +3746,7 @@ function ImageGenerator() {
             <div className="placeholder-icon">
               ✦
             </div>
+
 
             <div>
 
@@ -2042,6 +3773,7 @@ function ImageGenerator() {
 
         <section className="full-width-card">
 
+
           <div className="card-header">
 
             <div>
@@ -2056,6 +3788,7 @@ function ImageGenerator() {
 
             </div>
 
+
             <span className="output-path">
               output/
             </span>
@@ -2068,6 +3801,7 @@ function ImageGenerator() {
             <div className="placeholder-icon">
               □
             </div>
+
 
             <div>
 
@@ -2099,16 +3833,21 @@ function ImageGenerator() {
         <div
           className="modal-backdrop"
           onMouseDown={() =>
-            setShowReferenceModal(false)
+            setShowReferenceModal(
+              false,
+            )
           }
         >
 
           <div
             className="reference-modal"
-            onMouseDown={(event) =>
+            onMouseDown={(
+              event,
+            ) =>
               event.stopPropagation()
             }
           >
+
 
             <div className="modal-header">
 
@@ -2142,6 +3881,7 @@ function ImageGenerator() {
 
             <div className="modal-options">
 
+
               <button
                 type="button"
                 className="modal-option"
@@ -2153,6 +3893,7 @@ function ImageGenerator() {
                 <span className="modal-option-icon">
                   ↑
                 </span>
+
 
                 <span>
 
@@ -2184,6 +3925,7 @@ function ImageGenerator() {
                   ↗
                 </span>
 
+
                 <span>
 
                   <strong>
@@ -2205,15 +3947,23 @@ function ImageGenerator() {
 
               <div className="url-input-area">
 
+
                 <input
                   type="url"
-                  value={externalUrl}
-                  onChange={(event) => {
+                  value={
+                    externalUrl
+                  }
+                  onChange={(
+                    event,
+                  ) => {
+
                     setExternalUrl(
-                      event.target.value,
+                      event.target
+                        .value,
                     );
 
                     setUrlError("");
+
                   }}
                   placeholder="https://..."
                   className="url-input"
@@ -2243,7 +3993,9 @@ function ImageGenerator() {
 
 
             <input
-              ref={uploadInputRef}
+              ref={
+                uploadInputRef
+              }
               type="file"
               hidden
               accept="
@@ -2276,15 +4028,72 @@ function ProjectManager() {
   return null;
 }
 
-function App() {
-  const currentPath =
-    window.location.pathname.replace(/\/+$/, "") || "/";
 
-  if (currentPath === "/project-manager") {
-    return <ProjectManager />;
+function App() {
+
+  const currentPath =
+    window.location.pathname.replace(
+      /\/+$/,
+      "",
+    ) || "/";
+
+
+  const [
+    apiSetupComplete,
+    setApiSetupComplete,
+  ] = useState(false);
+
+
+  const [
+    selectedApiKeys,
+    setSelectedApiKeys,
+  ] = useState<string[]>([]);
+
+
+  if (
+    currentPath ===
+    "/project-manager"
+  ) {
+    return (
+      <ProjectManager />
+    );
   }
 
-  return <ImageGenerator />;
+
+  if (!apiSetupComplete) {
+
+    return (
+      <ApiKeySetup
+        onComplete={(
+          selectedKeys,
+        ) => {
+
+          setSelectedApiKeys(
+            selectedKeys,
+          );
+
+          setApiSetupComplete(
+            true,
+          );
+
+        }}
+      />
+    );
+  }
+
+
+  return (
+    <ImageGenerator
+      selectedApiKeys={
+        selectedApiKeys
+      }
+      onBackToApiSetup={() => {
+        setSelectedApiKeys([]);
+        setApiSetupComplete(false);
+      }}
+    />
+  );
 }
+
 
 export default App;

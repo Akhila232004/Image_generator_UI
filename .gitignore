@@ -1,17 +1,19 @@
-# Python virtual environment
-backend/.venv/
-
-# Python cache
+﻿# Python Environment
+.venv/
+venv/
 __pycache__/
-*.py[cod]
+*.pyc
 
-# Environment variables
-.env
-.env.*
+# Google API Private Secrets
+backend/credentials.json
+backend/token.json
 
-# Node dependencies
+# Local Uploads, Cache, and Temp Templates
+backend/uploads/
+backend/templates/
+backend/input/
+
+# Frontend Dependencies
 frontend/node_modules/
 frontend/dist/
-
-# Generated output
-output/
+frontend/build/
