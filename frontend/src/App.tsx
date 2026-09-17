@@ -13,8 +13,6 @@ import type {
 import "./App.css";
 
 import { generateTemplate } from "./services/templateService";
-import { generatePrompt } from "./services/promptService";
-
 import type {
   GenerateTemplateResponse,
 } from "./services/templateService";
@@ -189,12 +187,22 @@ interface ApiKeyOption {
   id: string;
   name: string;
   keyName: string;
+  authType?: string;
+  displayName?: string;
+  duplicateNumber?: number;
 }
 
+
+interface SelectedApiService {
+  id: string;
+  name: string;
+  keyName?: string;
+}
 
 interface ApiKeySetupProps {
   onComplete: (
     selectedKeys: string[],
+    selectedServices: SelectedApiService[],
   ) => void;
 }
 
@@ -207,9 +215,6 @@ function ApiKeySetup({
 
   const [apiKeys, setApiKeys] =
     useState<ApiKeyOption[]>([]);
-
-  const [selectedKeys, setSelectedKeys] =
-    useState<string[]>([]);
 
   const [isUploading, setIsUploading] =
     useState(false);
@@ -229,7 +234,6 @@ function ApiKeySetup({
   ) {
     setApiFile(file);
     setApiKeys([]);
-    setSelectedKeys([]);
     setError("");
     setIsUploading(true);
 
@@ -273,41 +277,94 @@ function ApiKeySetup({
 
 
       /*
-       * The backend already groups aliases such as
-       * GEMINI_API_KEY and GOOGLE_API_KEY into one
-       * logical service.
+       * Google Drive is intentionally NOT an API-key selection option.
+       * It is an OAuth-backed reference source and is used directly by
+       * the Google Drive reference loader in the Image Generator.
        *
-       * Keep a frontend guard as well so duplicate
-       * service names can never appear in the setup UI.
+       * Keep the Drive credential/configuration on the backend, but hide
+       * its synthetic OAuth entry from this API selection screen.
        */
+      const visibleRawKeys = rawKeys.filter((api) => {
+        const name = String(api.name || "").toLowerCase();
+        const keyName = String(api.keyName || "").toLowerCase();
 
-      const seenServices =
-        new Set<string>();
+        return (
+          api.authType !== "oauth" &&
+          !name.includes("google drive") &&
+          !keyName.includes("google_drive") &&
+          !keyName.includes("gdrive")
+        );
+      });
 
-      const keys =
-        rawKeys.filter(
-          (api) => {
-            const serviceName =
-              api.name
-                .trim()
-                .toLowerCase();
 
-            if (
-              seenServices.has(
-                serviceName,
-              )
-            ) {
-              return false;
-            }
+      /*
+       * Keep every supported AI/API credential. Multiple credentials for
+       * the same provider can be selected independently.
+       *
+       * Examples:
+       *   Gemini API
+       *   Gemini API 2
+       *   Gemini API 3
+       */
+      const serviceCounts =
+        new Map<string, number>();
 
-            seenServices.add(
-              serviceName,
-            );
+      const keys = visibleRawKeys.map((api) => {
+        const baseName =
+          api.name.trim() || "API";
+        const normalizedName =
+          baseName.toLowerCase();
+        const occurrence =
+          (serviceCounts.get(normalizedName) || 0) + 1;
 
-            return true;
-          },
+        serviceCounts.set(
+          normalizedName,
+          occurrence,
         );
 
+        return {
+          ...api,
+          name: baseName,
+          displayName: baseName,
+          duplicateNumber: occurrence,
+        };
+      });
+
+      const duplicateTotals =
+        new Map<string, number>();
+
+      keys.forEach((api) => {
+        const normalizedName =
+          api.name.trim().toLowerCase();
+        duplicateTotals.set(
+          normalizedName,
+          (duplicateTotals.get(normalizedName) || 0) + 1,
+        );
+      });
+
+      const displayKeys = keys.map((api) => {
+        const normalizedName =
+          api.name.trim().toLowerCase();
+        const total =
+          duplicateTotals.get(normalizedName) || 1;
+
+        return {
+          ...api,
+          name:
+            total > 1
+              ? `${api.displayName} ${api.duplicateNumber}`
+              : api.displayName,
+        };
+      });
+
+
+      if (!displayKeys.length) {
+        throw new Error(
+          "No supported API keys were found in the uploaded file.",
+        );
+      }
+
+      setApiKeys(displayKeys);
 
       if (!keys.length) {
         throw new Error(
@@ -315,7 +372,7 @@ function ApiKeySetup({
         );
       }
 
-      setApiKeys(keys);
+      setApiKeys(displayKeys);
 
     } catch (err) {
       console.error(
@@ -337,30 +394,31 @@ function ApiKeySetup({
   }
 
 
-  function toggleApiKey(
-    keyId: string,
-  ) {
-    setSelectedKeys(
-      (current) =>
-        current.includes(keyId)
-          ? current.filter(
-              (id) =>
-                id !== keyId,
-            )
-          : [
-              ...current,
-              keyId,
-            ],
-    );
+
+  function handleDownloadApiTemplate() {
+    const templateBlob = new Blob([], {
+      type: "application/octet-stream",
+    });
+
+    const downloadUrl =
+      URL.createObjectURL(templateBlob);
+
+    const link =
+      document.createElement("a");
+
+    link.href = downloadUrl;
+    link.download = "API key Template.txt";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    URL.revokeObjectURL(downloadUrl);
   }
 
 
   async function handleContinue() {
-    if (!selectedKeys.length) {
-      setError(
-        "Select at least one API before continuing.",
-      );
-
+    if (!apiKeys.length) {
+      setError("Upload an API key file before continuing.");
       return;
     }
 
@@ -378,8 +436,7 @@ function ApiKeySetup({
                 "application/json",
             },
             body: JSON.stringify({
-              selected_ids:
-                selectedKeys,
+              selected_ids: [],
             }),
           },
         );
@@ -398,8 +455,16 @@ function ApiKeySetup({
         );
       }
 
+      const selectedServices =
+        apiKeys.map((api) => ({
+          id: api.id,
+          name: api.name,
+          keyName: api.keyName,
+        }));
+
       onComplete(
-        selectedKeys,
+        [],
+        selectedServices,
       );
 
     } catch (err) {
@@ -493,11 +558,11 @@ function ApiKeySetup({
             <div>
 
               <strong>
-                Select APIs
+                Review APIs
               </strong>
 
               <small>
-                Choose the services to activate.
+                API keys can be selected from the workspace header.
               </small>
 
             </div>
@@ -510,7 +575,7 @@ function ApiKeySetup({
 
           <div
             className={`api-setup-step ${
-              selectedKeys.length
+              apiKeys.length
                 ? "active"
                 : ""
             }`}
@@ -589,6 +654,36 @@ function ApiKeySetup({
             </button>
 
 
+            <button
+              type="button"
+              className="api-template-download-button"
+              onClick={handleDownloadApiTemplate}
+              style={{
+                width: "100%",
+                marginTop: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "10px",
+                padding: "12px 16px",
+                borderRadius: "12px",
+                border: "1px solid rgba(255, 255, 255, 0.12)",
+                background: "rgba(255, 255, 255, 0.04)",
+                color: "inherit",
+                cursor: "pointer",
+                font: "inherit",
+              }}
+            >
+              <span aria-hidden="true">
+                ↓
+              </span>
+
+              <span>
+                Download API Key Template
+              </span>
+            </button>
+
+
             {apiFile &&
               !isUploading && (
                 <div className="api-uploaded-file">
@@ -626,14 +721,14 @@ function ApiKeySetup({
                 </span>
 
                 <strong>
-                  Select API services
+                  Available API services
                 </strong>
 
               </div>
 
               {apiKeys.length > 0 && (
                 <small>
-                  {selectedKeys.length} selected
+                  {apiKeys.length} available
                 </small>
               )}
 
@@ -682,33 +777,30 @@ function ApiKeySetup({
                 {apiKeys.map(
                   (api) => (
 
-                    <label
+                    <div
                       key={api.id}
-                      className={`api-key-option ${
-                        selectedKeys.includes(
-                          api.id,
-                        )
-                          ? "selected"
-                          : ""
-                      }`}
+                      className="api-key-option"
+                      style={{
+                        cursor: "default",
+                        transition:
+                          "border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease",
+                      }}
                     >
 
-                      <input
-                        type="checkbox"
-                        checked={selectedKeys.includes(
-                          api.id,
-                        )}
-                        onChange={() =>
-                          toggleApiKey(
-                            api.id,
-                          )
-                        }
-                      />
-
-                      <span className="api-key-service-icon">
-                        {api.name
-                          .charAt(0)
-                          .toUpperCase()}
+                      <span
+                        className="api-key-service-icon"
+                        style={{
+                          width: "32px",
+                          height: "32px",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "rgba(255,255,255,0.06)",
+                          borderRadius: "9px",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {getApiServiceIcon(api.name, api.keyName, 24)}
                       </span>
 
                       <span className="api-key-service-text">
@@ -718,23 +810,16 @@ function ApiKeySetup({
                         </strong>
 
                         <small>
-                          {api.name ===
-                          "Google Drive API"
-                            ? "OAuth access available"
-                            : "API credential detected"}
+                          API credential detected
                         </small>
 
                       </span>
 
                       <span className="api-key-state">
-                        {selectedKeys.includes(
-                          api.id,
-                        )
-                          ? "Selected"
-                          : "Select"}
+                        Available
                       </span>
 
-                    </label>
+                    </div>
 
                   ),
                 )}
@@ -784,7 +869,6 @@ function ApiKeySetup({
             className="api-continue-button"
             disabled={
               !apiKeys.length ||
-              !selectedKeys.length ||
               isSaving
             }
             onClick={
@@ -793,7 +877,7 @@ function ApiKeySetup({
           >
 
             {isSaving
-              ? "Activating..."
+              ? "Loading..."
               : "Continue to Image Generator"}
 
             <span>
@@ -813,16 +897,551 @@ function ApiKeySetup({
 
 interface ImageGeneratorProps {
   selectedApiKeys: string[];
+  selectedApiServices: SelectedApiService[];
+  availableApiServices: SelectedApiService[];
+  onApiSelectionChange: (selectedIds: string[]) => void;
   onBackToApiSetup: () => void;
 }
 
 
+function getApiServiceIcon(
+  serviceName: string,
+  keyName = "",
+  size = 24,
+) {
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const service = normalize(serviceName);
+  const key = normalize(keyName);
+
+  /*
+   * Provider icon registry
+   * ------------------------------------------------------------
+   *
+   * The key name is checked before the display name. This is
+   * important because different environment-variable names can
+   * represent the same provider.
+   *
+   * Provider-specific assets are used instead of rendering the
+   * first character of the provider name. Therefore the UI shows
+   * only the real provider icon + provider name.
+   *
+   * Gemini uses Google's official Gemini sparkle asset.
+   * Claude uses Claude's product favicon.
+   * OpenRouter uses its current official app icon.
+   * Other providers use their own official site favicon.
+   */
+  const brandIcons: Array<{
+    matches: string[];
+    iconUrl: string;
+    alt: string;
+  }> = [
+    // Google / Gemini
+    {
+      matches: [
+        "gemini api",
+        "gemini",
+        "google gemini",
+        "gemini api key",
+        "gemini api key",
+        "google api key",
+        "google ai api",
+        "google ai api key",
+        "generative ai api",
+      ],
+      iconUrl:
+        "https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg",
+      alt: "Google Gemini",
+    },
+    {
+      matches: [
+        "google drive api",
+        "google drive",
+        "drive api",
+        "gdrive api",
+      ],
+      iconUrl:
+        "https://drive.google.com/favicon.ico",
+      alt: "Google Drive",
+    },
+    {
+      matches: [
+        "google cloud api",
+        "google cloud",
+        "gcp api",
+        "google vertex api",
+        "google vertex",
+      ],
+      iconUrl:
+        "https://cloud.google.com/favicon.ico",
+      alt: "Google Cloud",
+    },
+    {
+      matches: [
+        "google api",
+        "google",
+      ],
+      iconUrl:
+        "https://www.google.com/favicon.ico",
+      alt: "Google",
+    },
+
+    // AI providers — exact product icons
+    {
+      matches: [
+        "openrouter api",
+        "openrouter",
+        "open router api",
+        "open router",
+        "openrouter api key",
+      ],
+      iconUrl:
+        "https://openrouter.ai/apple-touch-icon.png",
+      alt: "OpenRouter",
+    },
+    {
+      matches: [
+        "claude api",
+        "claude",
+        "claude ai",
+        "anthropic claude",
+        "anthropic api",
+        "anthropic",
+        "anthropic api key",
+      ],
+      iconUrl:
+        // "https://claude.ai/favicon.ico",
+        "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/claude-ai.svg",
+      alt: "Claude",
+    },
+    {
+      matches: [
+        "openai api",
+        "openai",
+        "chatgpt api",
+        "chatgpt",
+        "openai api key",
+      ],
+      iconUrl:
+        "https://openai.com/favicon.ico",
+      alt: "OpenAI",
+    },
+    {
+      matches: [
+        "groq api",
+        "groq",
+        "groq api key",
+      ],
+      iconUrl:
+        "https://groq.com/favicon.ico",
+      alt: "Groq",
+    },
+    {
+      matches: [
+        "mistral api",
+        "mistral",
+        "mistralai",
+        "mistral ai",
+        "mistral ai api",
+      ],
+      iconUrl:
+        "https://mistral.ai/favicon.ico",
+      alt: "Mistral AI",
+    },
+    {
+      matches: [
+        "cohere api",
+        "cohere",
+        "cohere api key",
+      ],
+      iconUrl:
+        "https://cohere.com/favicon.ico",
+      alt: "Cohere",
+    },
+    {
+      matches: [
+        "hugging face api",
+        "huggingface api",
+        "hugging face",
+        "huggingface",
+      ],
+      iconUrl:
+        "https://huggingface.co/favicon.ico",
+      alt: "Hugging Face",
+    },
+    {
+      matches: [
+        "perplexity api",
+        "perplexity",
+        "perplexity api key",
+      ],
+      iconUrl:
+        "https://www.perplexity.ai/favicon.ico",
+      alt: "Perplexity",
+    },
+    {
+      matches: [
+        "deepseek api",
+        "deepseek",
+        "deepseek api key",
+      ],
+      iconUrl:
+        "https://www.deepseek.com/favicon.ico",
+      alt: "DeepSeek",
+    },
+    {
+      matches: [
+        "xai api",
+        "xai",
+        "x ai api",
+        "grok api",
+        "grok",
+        "x ai",
+      ],
+      iconUrl:
+        "https://x.ai/favicon.ico",
+      alt: "xAI",
+    },
+    {
+      matches: [
+        "qwen api",
+        "qwen",
+        "alibaba qwen",
+      ],
+      iconUrl:
+        "https://qwen.ai/favicon.ico",
+      alt: "Qwen",
+    },
+    {
+      matches: [
+        "fireworks api",
+        "fireworks",
+        "fireworks ai",
+      ],
+      iconUrl:
+        "https://fireworks.ai/favicon.ico",
+      alt: "Fireworks AI",
+    },
+    {
+      matches: [
+        "together ai api",
+        "together api",
+        "together ai",
+        "together",
+      ],
+      iconUrl:
+        "https://www.together.ai/favicon.ico",
+      alt: "Together AI",
+    },
+    {
+      matches: [
+        "replicate api",
+        "replicate",
+      ],
+      iconUrl:
+        "https://replicate.com/favicon.ico",
+      alt: "Replicate",
+    },
+    {
+      matches: [
+        "stability ai api",
+        "stability ai",
+        "stabilityai",
+        "stability",
+      ],
+      iconUrl:
+        "https://stability.ai/favicon.ico",
+      alt: "Stability AI",
+    },
+    {
+      matches: [
+        "elevenlabs api",
+        "eleven labs api",
+        "elevenlabs",
+        "eleven labs",
+      ],
+      iconUrl:
+        "https://elevenlabs.io/favicon.ico",
+      alt: "ElevenLabs",
+    },
+    {
+      matches: [
+        "assemblyai api",
+        "assembly ai api",
+        "assemblyai",
+        "assembly ai",
+      ],
+      iconUrl:
+        "https://www.assemblyai.com/favicon.ico",
+      alt: "AssemblyAI",
+    },
+
+    // Microsoft / AWS / Meta
+    {
+      matches: [
+        "azure api",
+        "microsoft azure api",
+        "azure",
+        "microsoft azure",
+        "azure openai api",
+      ],
+      iconUrl:
+        "https://azure.microsoft.com/favicon.ico",
+      alt: "Microsoft Azure",
+    },
+    {
+      matches: [
+        "microsoft api",
+        "microsoft",
+        "ms graph api",
+        "microsoft graph api",
+        "graph api",
+      ],
+      iconUrl:
+        "https://www.microsoft.com/favicon.ico",
+      alt: "Microsoft",
+    },
+    {
+      matches: [
+        "aws api",
+        "amazon web services api",
+        "amazon web services",
+        "amazon api",
+        "aws",
+      ],
+      iconUrl:
+        "https://aws.amazon.com/favicon.ico",
+      alt: "Amazon Web Services",
+    },
+    {
+      matches: [
+        "meta api",
+        "meta",
+        "facebook api",
+        "facebook",
+      ],
+      iconUrl:
+        "https://www.meta.com/favicon.ico",
+      alt: "Meta",
+    },
+
+    // Developer / data / infrastructure
+    {
+      matches: ["pinecone api", "pinecone"],
+      iconUrl:
+        "https://www.pinecone.io/favicon.ico",
+      alt: "Pinecone",
+    },
+    {
+      matches: ["github api", "github"],
+      iconUrl:
+        "https://github.com/favicon.ico",
+      alt: "GitHub",
+    },
+    {
+      matches: ["gitlab api", "gitlab"],
+      iconUrl:
+        "https://gitlab.com/favicon.ico",
+      alt: "GitLab",
+    },
+
+    // Communication / productivity / design
+    {
+      matches: ["youtube api", "youtube"],
+      iconUrl:
+        "https://www.youtube.com/favicon.ico",
+      alt: "YouTube",
+    },
+    {
+      matches: ["stripe api", "stripe"],
+      iconUrl:
+        "https://stripe.com/favicon.ico",
+      alt: "Stripe",
+    },
+    {
+      matches: ["twilio api", "twilio"],
+      iconUrl:
+        "https://www.twilio.com/favicon.ico",
+      alt: "Twilio",
+    },
+    {
+      matches: ["sendgrid api", "sendgrid"],
+      iconUrl:
+        "https://sendgrid.com/favicon.ico",
+      alt: "SendGrid",
+    },
+    {
+      matches: ["slack api", "slack"],
+      iconUrl:
+        "https://slack.com/favicon.ico",
+      alt: "Slack",
+    },
+    {
+      matches: ["discord api", "discord"],
+      iconUrl:
+        "https://discord.com/favicon.ico",
+      alt: "Discord",
+    },
+    {
+      matches: ["notion api", "notion"],
+      iconUrl:
+        "https://www.notion.so/favicon.ico",
+      alt: "Notion",
+    },
+    {
+      matches: ["canva api", "canva"],
+      iconUrl:
+        "https://www.canva.com/favicon.ico",
+      alt: "Canva",
+    },
+    {
+      matches: ["figma api", "figma"],
+      iconUrl:
+        "https://www.figma.com/favicon.ico",
+      alt: "Figma",
+    },
+  ];
+
+  const matchesEntry = (entry: (typeof brandIcons)[number]) =>
+    entry.matches.some((match) => {
+      const normalizedMatch = normalize(match);
+
+      return (
+        key === normalizedMatch ||
+        service === normalizedMatch ||
+        key.includes(normalizedMatch) ||
+        service.includes(normalizedMatch)
+      );
+    });
+
+  const brand = brandIcons.find(matchesEntry);
+
+  if (brand) {
+    return (
+      <img
+        src={brand.iconUrl}
+        alt={`${brand.alt} icon`}
+        title={brand.alt}
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          display: "block",
+          objectFit: "contain",
+          flexShrink: 0,
+          borderRadius: "4px",
+        }}
+        onError={(event) => {
+          /*
+           * Never render A, C, O, or any other provider letter.
+           * If a remote provider asset is temporarily unavailable,
+           * show a neutral icon until the asset loads again.
+           */
+          const image = event.currentTarget;
+          image.style.display = "none";
+
+          const fallback =
+            document.createElement("span");
+
+          fallback.innerHTML = `
+            <svg
+              width="${size}"
+              height="${size}"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path
+                d="M8 12h8M12 8v8"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          `;
+
+          fallback.style.width = `${size}px`;
+          fallback.style.height = `${size}px`;
+          fallback.style.display = "inline-flex";
+          fallback.style.alignItems = "center";
+          fallback.style.justifyContent = "center";
+          fallback.style.color = "#7C6CFF";
+          fallback.style.flexShrink = "0";
+
+          image.parentElement?.appendChild(fallback);
+        }}
+      />
+    );
+  }
+
+  /*
+   * Unknown/custom provider:
+   * never use the provider's first letter. Use a neutral API
+   * symbol instead so the UI always remains icon + name.
+   */
+  return (
+    <span
+      title={`${serviceName} icon`}
+      aria-label={`${serviceName} icon`}
+      style={{
+        width: `${size}px`,
+        height: `${size}px`,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#7C6CFF",
+        flexShrink: 0,
+      }}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true"
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M8 12h8M12 8v8"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function ImageGenerator({
   selectedApiKeys,
+  selectedApiServices,
+  availableApiServices,
+  onApiSelectionChange,
   onBackToApiSetup,
 }: ImageGeneratorProps) {
-
-  void selectedApiKeys;
 
 
   const [inputFiles, setInputFiles] =
@@ -858,6 +1477,45 @@ function ImageGenerator({
     useState<GenerateTemplateResponse | null>(
       null,
     );
+
+  const [templateApiProvider, setTemplateApiProvider] =
+    useState("");
+
+  const [templateApiModel, setTemplateApiModel] =
+    useState("");
+
+  const [promptApiProvider, setPromptApiProvider] =
+    useState("");
+
+  const [promptApiModel, setPromptApiModel] =
+    useState("");
+
+  const [generatedImageUrl, setGeneratedImageUrl] =
+    useState("");
+
+  const [generatedImageFilename, setGeneratedImageFilename] =
+    useState("");
+
+  const [generatedImageModel, setGeneratedImageModel] =
+    useState("");
+
+  const [generatedImageProvider, setGeneratedImageProvider] =
+    useState("");
+
+  const [isSavingGeneratedImage, setIsSavingGeneratedImage] =
+    useState(false);
+
+  const [generatedImageSaved, setGeneratedImageSaved] =
+    useState(false);
+
+  const [generatedImageSaveMessage, setGeneratedImageSaveMessage] =
+    useState("");
+
+  const [generatedTextChanges, setGeneratedTextChanges] =
+    useState<Record<string, string>>({});
+
+  const [isGeneratingImage, setIsGeneratingImage] =
+    useState(false);
 
   const [isLoadingInputs, setIsLoadingInputs] =
     useState(false);
@@ -1144,7 +1802,9 @@ function ImageGenerator({
 
   useEffect(() => {
 
-    return () => {
+  ;
+
+  return () => {
 
       Object.values(
         previewUrls,
@@ -1440,20 +2100,20 @@ function ImageGenerator({
    */
 
   useEffect(() => {
-
+    // Do not call the AI tagging endpoint until at least one AI API key
+    // has been selected. API selection is the source of truth for the
+    // complete AI pipeline.
     if (
-      inputFiles.length >
-      0
+      inputFiles.length > 0 &&
+      selectedApiKeys.length > 0
     ) {
-
-      generateInputImageTags(
-        inputFiles,
-      );
-
+      void generateInputImageTags(inputFiles);
     }
 
+    // generateInputImageTags is intentionally omitted because it is recreated
+    // on render. The effect is driven by the input count and selected-key count.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputFiles.length]);
+  }, [inputFiles.length, selectedApiKeys.length]);
 
 
   /*
@@ -1473,6 +2133,10 @@ function ImageGenerator({
     setTemplatePrompt(
       "",
     );
+
+    setGeneratedImageUrl("");
+    setGeneratedImageFilename("");
+    setGeneratedImageModel("");
 
     setPromptMode(
       "manual",
@@ -2117,6 +2781,10 @@ function ImageGenerator({
       null,
     );
 
+    setGeneratedImageUrl("");
+    setGeneratedImageFilename("");
+    setGeneratedImageModel("");
+
     setError("");
   }
 
@@ -2161,6 +2829,8 @@ function ImageGenerator({
     setTemplateResult(
       null,
     );
+    setTemplateApiProvider("");
+    setTemplateApiModel("");
 
 
     try {
@@ -2195,6 +2865,13 @@ function ImageGenerator({
       setTemplateResult(
         result,
       );
+
+      const templateMetadata = result as GenerateTemplateResponse & {
+        provider?: string;
+        model?: string;
+      };
+      setTemplateApiProvider(String(templateMetadata.provider || ""));
+      setTemplateApiModel(String(templateMetadata.model || ""));
 
     } catch (err) {
 
@@ -2257,30 +2934,51 @@ function ImageGenerator({
     setIsGeneratingPrompt(
       true,
     );
+    setPromptApiProvider("");
+    setPromptApiModel("");
 
 
     try {
 
-      const generatedPrompt =
-        await generatePrompt({
-          type:
-            reference.type,
+      const sourceType =
+        reference.source === "google-drive"
+          ? "google-drive"
+          : reference.source === "upload"
+            ? "upload"
+            : reference.source === "input-folder"
+              ? "input-folder"
+              : "external-url";
 
-          name:
-            reference.name,
+      const source = reference.sourceId || reference.url;
+      if (!source || source.startsWith("blob:")) {
+        throw new Error("The selected reference is not available to the backend.");
+      }
 
-          url:
-            reference.url,
+      const formData = new FormData();
+      formData.append("source_type", sourceType);
+      formData.append("source", source);
+      formData.append("filename", reference.name);
+      formData.append("content_type", reference.mimeType || "");
 
-          source:
-            reference.source as any,
+      const promptResponse = await fetch(
+        `${API_BASE_URL}/api/prompts/generate`,
+        { method: "POST", body: formData },
+      );
+      const promptData = await promptResponse.json().catch(() => null);
 
-          sourceId:
-            reference.sourceId,
+      if (!promptResponse.ok) {
+        throw new Error(
+          String(promptData?.detail || "Unable to generate a prompt with AI."),
+        );
+      }
 
-          mimeType:
-            reference.mimeType,
-        });
+      const generatedPrompt = String(promptData?.prompt || "").trim();
+      if (!generatedPrompt) {
+        throw new Error("The selected API returned an empty prompt.");
+      }
+
+      setPromptApiProvider(String(promptData?.provider || ""));
+      setPromptApiModel(String(promptData?.model || ""));
 
 
       setTemplatePrompt(
@@ -2309,6 +3007,239 @@ function ImageGenerator({
     } finally {
 
       setIsGeneratingPrompt(
+        false,
+      );
+    }
+  }
+
+
+  /*
+   * ------------------------------------------------------------
+   * Generate output image
+   * ------------------------------------------------------------
+   */
+
+  async function handleGenerateImage() {
+
+    if (!reference) {
+
+      setError(
+        "Please select a reference image first.",
+      );
+
+      return;
+    }
+
+
+    if (!templateResult) {
+
+      setError(
+        "Generate the template before generating the output image.",
+      );
+
+      return;
+    }
+
+
+    if (!templatePrompt.trim()) {
+
+      setError(
+        "Enter a content prompt before generating the output image.",
+      );
+
+      return;
+    }
+
+
+    if (
+      reference.type === "pdf" ||
+      reference.type === "video" ||
+      reference.type === "youtube"
+    ) {
+
+      setError(
+        "Image generation currently requires an image reference.",
+      );
+
+      return;
+    }
+
+
+    setError("");
+    setGeneratedImageUrl("");
+    setGeneratedImageFilename("");
+    setGeneratedImageModel("");
+    setGeneratedImageProvider("");
+    setGeneratedImageSaved(false);
+    setGeneratedImageSaveMessage("");
+    setGeneratedTextChanges({});
+    setIsGeneratingImage(true);
+
+
+    try {
+
+      const sourceType =
+        reference.source ===
+        "google-drive"
+          ? "google-drive"
+          : reference.source ===
+              "upload"
+            ? "upload"
+            : reference.source ===
+                "input-folder"
+              ? "input-folder"
+              : "external-url";
+
+
+      const source =
+        reference.sourceId ||
+        reference.url;
+
+
+      if (
+        source.startsWith("blob:")
+      ) {
+
+        throw new Error(
+          "The selected uploaded reference is not available to the backend.",
+        );
+      }
+
+
+      if (!source) {
+
+        throw new Error(
+          "Reference source is missing.",
+        );
+      }
+
+
+      const formData =
+        new FormData();
+
+
+      formData.append(
+        "source_type",
+        sourceType,
+      );
+
+      formData.append(
+        "source",
+        source,
+      );
+
+      formData.append(
+        "filename",
+        reference.name,
+      );
+
+      formData.append(
+        "content_type",
+        reference.mimeType || "",
+      );
+
+      formData.append(
+        "prompt",
+        templatePrompt.trim(),
+      );
+
+      formData.append(
+        "template_json",
+        JSON.stringify(
+          templateResult.template,
+        ),
+      );
+
+
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/images/generate`,
+          {
+            method:
+              "POST",
+            body:
+              formData,
+          },
+        );
+
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+
+      if (!response.ok) {
+
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to generate the output image.",
+          ),
+        );
+      }
+
+
+      if (!data?.image_url) {
+
+        throw new Error(
+          "Image generation completed without an output image.",
+        );
+      }
+
+
+      setGeneratedImageUrl(
+        resolveApiUrl(
+          data.image_url,
+        ),
+      );
+
+      setGeneratedImageFilename(
+        String(
+          data.filename ||
+            "",
+        ),
+      );
+
+      setGeneratedImageModel(
+        String(
+          data.model ||
+            "",
+        ),
+      );
+      setGeneratedImageProvider(
+        String(
+          data.provider ||
+            "",
+        ),
+      );
+      setGeneratedImageSaved(false);
+      setGeneratedImageSaveMessage("");
+
+      setGeneratedTextChanges(
+        data?.changes &&
+        typeof data.changes === "object"
+          ? data.changes
+          : {},
+      );
+
+    } catch (err) {
+
+      console.error(
+        "Image generation failed:",
+        err,
+      );
+
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to generate the output image.",
+      );
+
+    } finally {
+
+      setIsGeneratingImage(
         false,
       );
     }
@@ -2425,6 +3356,46 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
+  const handleSaveGeneratedImageToDrive = async () => {
+    if (!generatedImageFilename || isSavingGeneratedImage) return;
+
+    setIsSavingGeneratedImage(true);
+    setGeneratedImageSaveMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("filename", generatedImageFilename);
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/images/save-to-drive`,
+        { method: "POST", body: formData },
+      );
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to save the generated image to Google Drive.",
+          ),
+        );
+      }
+
+      setGeneratedImageSaved(true);
+      setGeneratedImageSaveMessage(
+        String(data?.message || "Saved to Google Drive / outputs."),
+      );
+    } catch (error) {
+      setGeneratedImageSaved(false);
+      setGeneratedImageSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to save the generated image.",
+      );
+    } finally {
+      setIsSavingGeneratedImage(false);
+    }
+  };
+
   return (
     <div className="app-shell">
 
@@ -2455,18 +3426,67 @@ function ImageGenerator({
 
         <div className="header-actions">
 
-          <div className="active-api-summary">
-
-            <span>
-              APIs
-            </span>
-
-            <strong>
-              {
-                selectedApiKeys.length
-              }
-            </strong>
-
+          <div
+            className="active-api-summary"
+            aria-label="Available API services. Click to select or deselect."
+            title="Select the API keys that may be used by the pipeline"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              flexWrap: "wrap",
+              maxWidth: "min(58vw, 700px)",
+              justifyContent: "flex-end",
+            }}
+          >
+            {availableApiServices.length > 0 ? (
+              availableApiServices.map((service) => {
+                const selected = selectedApiKeys.includes(service.id);
+                return (
+                  <button
+                    key={service.id}
+                    type="button"
+                    className={`active-api-service ${selected ? "selected" : ""}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      const next = selected
+                        ? selectedApiKeys.filter((id) => id !== service.id)
+                        : [...selectedApiKeys, service.id];
+                      onApiSelectionChange(next);
+                    }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "6px 10px",
+                      borderRadius: "999px",
+                      border: selected
+                        ? "1px solid rgba(120, 180, 255, 0.95)"
+                        : "1px solid rgba(255,255,255,0.12)",
+                      background: selected
+                        ? "rgba(80, 140, 255, 0.18)"
+                        : "rgba(255,255,255,0.055)",
+                      boxShadow: selected
+                        ? "0 0 0 1px rgba(120, 180, 255, 0.22)"
+                        : "none",
+                      color: "inherit",
+                      whiteSpace: "nowrap",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      lineHeight: 1,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span aria-hidden="true">
+                      {getApiServiceIcon(service.name, service.keyName, 18)}
+                    </span>
+                    <span>{service.name}</span>
+                  </button>
+                );
+              })
+            ) : (
+              <span>APIs 0</span>
+            )}
           </div>
 
 
@@ -3437,7 +4457,7 @@ function ImageGenerator({
                       <div className="template-region-flow">
 
                         {
-                          templateResult.template.regions.map(
+                          (Array.isArray(templateResult.template.regions) ? templateResult.template.regions : []).map(
                             (
                               region,
                               index,
@@ -3511,7 +4531,7 @@ function ImageGenerator({
                       <div className="template-color-list structured">
 
                         {
-                          templateResult.template.style.dominant_colors.map(
+                          (Array.isArray(templateResult.template.style?.dominant_colors) ? templateResult.template.style.dominant_colors : []).map(
                             (
                               color,
                             ) => (
@@ -3611,6 +4631,90 @@ function ImageGenerator({
               </div>
 
             </div>
+
+
+            {templateResult && (
+              <div className="generated-output-meta" style={{ marginTop: "16px" }}>
+                <span>API Provider</span>
+                <strong>{templateApiProvider || "Selected API"}</strong>
+                <span>Model</span>
+                <strong>{templateApiModel || "Provider model"}</strong>
+              </div>
+            )}
+
+
+            {templateResult && (
+              <div className="template-editable-section">
+
+                <div className="template-structure-heading">
+                  <div>
+                    <span className="template-section-number">
+                      04
+                    </span>
+                    <strong>
+                      Editable Text Groups
+                    </strong>
+                  </div>
+
+                  <span>
+                    Existing text regions that can be replaced
+                  </span>
+                </div>
+
+                {templateResult.template.text_groups &&
+                templateResult.template.text_groups.length > 0 ? (
+                  <div className="editable-text-list">
+                    {(Array.isArray(templateResult.template.text_groups) ? templateResult.template.text_groups : []).map((group) => (
+                      <div
+                        key={group.id}
+                        className="editable-text-item"
+                      >
+                        <div
+                          className="editable-text-swatch"
+                          style={{
+                            backgroundColor:
+                              group.lines?.[0]?.color ||
+                              "#FFFFFF",
+                          }}
+                        />
+                        <div className="editable-text-copy">
+                          <strong>{group.text}</strong>
+                          <span>
+                            {group.role} · {group.line_count} line{group.line_count === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : templateResult.template.text_elements &&
+                  templateResult.template.text_elements.length > 0 ? (
+                  <div className="editable-text-list">
+                    {(Array.isArray(templateResult.template.text_elements) ? templateResult.template.text_elements : []).map((element) => (
+                      <div
+                        key={element.id}
+                        className="editable-text-item"
+                      >
+                        <div
+                          className="editable-text-swatch"
+                          style={{ backgroundColor: element.color }}
+                        />
+                        <div className="editable-text-copy">
+                          <strong>{element.text}</strong>
+                          <span>
+                            {element.id} · {element.width} × {element.height}px
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="editable-text-empty">
+                    No editable text regions were detected. Make sure Gemini is configured and regenerate the template.
+                  </div>
+                )}
+
+              </div>
+            )}
 
 
             <div className="template-prompt-area">
@@ -3715,9 +4819,9 @@ function ImageGenerator({
 
                     <span>
                       Gemini will analyze the
-                      selected reference image
-                      and create a reusable
-                      template prompt.
+                      selected reference and create
+                      a content-change prompt that
+                      keeps the template design fixed.
                     </span>
 
                   </div>
@@ -3752,6 +4856,16 @@ function ImageGenerator({
               )}
 
 
+              {promptApiProvider && (
+                <div className="generated-output-meta" style={{ marginBottom: "12px" }}>
+                  <span>API Provider</span>
+                  <strong>{promptApiProvider}</strong>
+                  <span>Model</span>
+                  <strong>{promptApiModel || "Provider model"}</strong>
+                </div>
+              )}
+
+
               <textarea
                 id="template-prompt"
                 className="template-textarea"
@@ -3769,15 +4883,15 @@ function ImageGenerator({
                 placeholder={
                   promptMode ===
                   "ai"
-                    ? "Generated prompt will appear here. You can edit it before sending it to Canva."
-                    : "Describe the content you want Canva to generate from the template..."
+                    ? "Generated content-change prompt will appear here. You can edit it before generating the final image."
+                    : "Describe which poster text or content should change while keeping the reference design..."
                 }
                 rows={6}
               />
 
 
               <div className="template-helper">
-                Template + Prompt → Canva
+                Reference Design + Content Changes → Final Image
               </div>
 
             </div>
@@ -3809,33 +4923,129 @@ function ImageGenerator({
             </div>
 
 
-            <span className="coming-pill">
-              Canva + MCP · Coming later
+            <span className="status-pill success">
+              Reference Design + Content Changes
             </span>
 
           </div>
 
 
-          <div className="builder-placeholder">
+          <div className="image-builder-panel">
 
-            <div className="placeholder-icon">
-              ✦
+            <div className="image-builder-summary">
+
+              <div className="image-builder-input-card">
+                <span className="image-builder-number">
+                  01
+                </span>
+
+                <div>
+                  <strong>
+                    Reference Image
+                  </strong>
+
+                  <span>
+                    {reference
+                      ? reference.name
+                      : "Not selected"}
+                  </span>
+                </div>
+
+              </div>
+
+
+              <div className="image-builder-plus">
+                +
+              </div>
+
+
+              <div className="image-builder-input-card">
+                <span className="image-builder-number">
+                  02
+                </span>
+
+                <div>
+                  <strong>
+                    Generated Template
+                  </strong>
+
+                  <span>
+                    {templateResult
+                      ? templateResult.template_name
+                      : "Not generated"}
+                  </span>
+                </div>
+
+              </div>
+
+
+              <div className="image-builder-plus">
+                +
+              </div>
+
+
+              <div className="image-builder-input-card">
+                <span className="image-builder-number">
+                  03
+                </span>
+
+                <div>
+                  <strong>
+                    Content Prompt
+                  </strong>
+
+                  <span>
+                    {templatePrompt.trim()
+                      ? "Prompt ready"
+                      : "Enter a prompt below"}
+                  </span>
+                </div>
+
+              </div>
+
             </div>
 
 
-            <div>
+            <button
+              type="button"
+              className="generate-button"
+              disabled={
+                !reference ||
+                !templateResult ||
+                !templatePrompt.trim() ||
+                isGeneratingImage
+              }
+              onClick={
+                handleGenerateImage
+              }
+            >
+              {isGeneratingImage
+                ? "Generating Image..."
+                : "Generate Image"}
+            </button>
 
-              <h3>
-                Ready to generate
-              </h3>
 
-              <p>
-                Template, content prompt and
-                AI configuration will be
-                connected here.
-              </p>
+            {isGeneratingImage && (
 
-            </div>
+              <div className="generation-progress">
+
+                <div className="generation-spinner" />
+
+                <div>
+                  <strong>
+                    Generating your image
+                  </strong>
+
+                  <span>
+                    Gemini is identifying the text changes, then the
+                    template renderer applies them to the original
+                    reference without redrawing the poster.
+                  </span>
+                </div>
+
+              </div>
+
+            )}
 
           </div>
 
@@ -3865,34 +5075,150 @@ function ImageGenerator({
 
 
             <span className="output-path">
-              output/
+              Google Drive / outputs
             </span>
 
           </div>
 
 
-          <div className="output-placeholder">
+          {generatedImageUrl ? (
 
-            <div className="placeholder-icon">
-              □
+            <div className="generated-output-card">
+
+              <div className="generated-output-preview">
+
+                <img
+                  src={
+                    generatedImageUrl
+                  }
+                  alt="Generated output"
+                />
+
+              </div>
+
+
+              <div className="generated-output-details">
+
+                <span className="generated-output-status">
+                  Generation complete
+                </span>
+
+                <h3>
+                  Generated Image
+                </h3>
+
+                <p>
+                  The original reference remains the visual base.
+                  Only the requested editable text/content is replaced
+                  using the generated template.
+                </p>
+
+
+                {Object.keys(generatedTextChanges).length > 0 && (
+                  <div className="generated-change-list">
+                    <span className="generated-change-heading">
+                      Applied content changes
+                    </span>
+                    {Object.entries(generatedTextChanges).map(([id, value]) => (
+                      <div key={id} className="generated-change-item">
+                        <span>{id}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {generatedImageFilename && (
+
+                  <div className="generated-output-meta">
+
+                    <span>
+                      File
+                    </span>
+
+                    <strong>
+                      {generatedImageFilename}
+                    </strong>
+
+                  </div>
+
+                )}
+
+
+                {generatedImageProvider && (
+                  <div className="generated-output-meta">
+                    <span>API Provider</span>
+                    <strong>{generatedImageProvider}</strong>
+                  </div>
+                )}
+
+
+                {generatedImageModel && (
+
+                  <div className="generated-output-meta">
+
+                    <span>
+                      Model
+                    </span>
+
+                    <strong>
+                      {generatedImageModel}
+                    </strong>
+
+                  </div>
+
+                )}
+
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleSaveGeneratedImageToDrive}
+                  disabled={isSavingGeneratedImage || generatedImageSaved}
+                  style={{ marginTop: 16 }}
+                >
+                  {isSavingGeneratedImage
+                    ? "Saving to Google Drive..."
+                    : generatedImageSaved
+                      ? "Saved to Google Drive / outputs"
+                      : "Save to Google Drive"}
+                </button>
+
+                {generatedImageSaveMessage && (
+                  <p style={{ marginTop: 8 }}>
+                    {generatedImageSaveMessage}
+                  </p>
+                )}
+
+              </div>
+
             </div>
 
+          ) : (
 
-            <div>
+            <div className="output-placeholder">
 
-              <h3>
-                No generated outputs yet
-              </h3>
+              <div className="placeholder-icon">
+                □
+              </div>
 
-              <p>
-                Your generated images, PDFs,
-                GIFs and videos will appear
-                here.
-              </p>
+
+              <div>
+
+                <h3>
+                  No generated outputs yet
+                </h3>
+
+                <p>
+                  Enter a content prompt and
+                  generate an image using the
+                  selected reference and template.
+                </p>
+
+              </div>
 
             </div>
 
-          </div>
+          )}
 
         </section>
 
@@ -4104,6 +5430,132 @@ function ProjectManager() {
 }
 
 
+/*
+ * ------------------------------------------------------------
+ * Application session persistence
+ * ------------------------------------------------------------
+ *
+ * Keep navigation state for the current browser session.
+ * Only non-secret state is stored here:
+ *   - whether API setup has been completed
+ *   - selected API service IDs
+ *   - selected API service names (for display only)
+ *
+ * Actual API credentials are never stored in browser
+ * sessionStorage.
+ */
+const APP_SESSION_KEY =
+  "image-generator-ui-session";
+
+
+interface AppSessionState {
+  apiSetupComplete: boolean;
+  selectedApiKeys: string[];
+  selectedApiServices: SelectedApiService[];
+  availableApiServices: SelectedApiService[];
+}
+
+
+function readAppSession(): AppSessionState {
+  const defaultSession: AppSessionState = {
+    apiSetupComplete: false,
+    selectedApiKeys: [],
+    selectedApiServices: [],
+    availableApiServices: [],
+  };
+
+  try {
+    const stored =
+      window.sessionStorage.getItem(
+        APP_SESSION_KEY,
+      );
+
+    if (!stored) {
+      return defaultSession;
+    }
+
+    const parsed =
+      JSON.parse(stored) as Partial<AppSessionState>;
+
+    return {
+      apiSetupComplete:
+        parsed.apiSetupComplete === true,
+      selectedApiKeys:
+        Array.isArray(parsed.selectedApiKeys)
+          ? parsed.selectedApiKeys.filter(
+              (value): value is string =>
+                typeof value === "string",
+            )
+          : [],
+      availableApiServices:
+        Array.isArray(parsed.availableApiServices)
+          ? parsed.availableApiServices
+              .filter(
+                (service): service is SelectedApiService =>
+                  Boolean(service) &&
+                  typeof service === "object" &&
+                  typeof (service as SelectedApiService).id === "string" &&
+                  typeof (service as SelectedApiService).name === "string",
+              )
+              .map((service) => ({
+                id: service.id,
+                name: service.name,
+                keyName: service.keyName,
+              }))
+          : [],
+      selectedApiServices:
+        Array.isArray(parsed.selectedApiServices)
+          ? parsed.selectedApiServices
+              .filter(
+                (service): service is SelectedApiService =>
+                  Boolean(service) &&
+                  typeof service === "object" &&
+                  typeof (service as SelectedApiService).id === "string" &&
+                  typeof (service as SelectedApiService).name === "string",
+              )
+              .map((service) => ({
+                id: service.id,
+                name: service.name,
+              }))
+          : [],
+    };
+  } catch (error) {
+    console.warn(
+      "Unable to restore application session:",
+      error,
+    );
+
+    return defaultSession;
+  }
+}
+
+
+function writeAppSession(
+  state: AppSessionState,
+) {
+  try {
+    window.sessionStorage.setItem(
+      APP_SESSION_KEY,
+      JSON.stringify({
+        apiSetupComplete:
+          state.apiSetupComplete,
+        selectedApiKeys:
+          state.selectedApiKeys,
+        selectedApiServices:
+          state.selectedApiServices,
+        availableApiServices:
+          state.availableApiServices,
+      }),
+    );
+  } catch (error) {
+    console.warn(
+      "Unable to save application session:",
+      error,
+    );
+  }
+}
+
+
 function App() {
 
   const currentPath =
@@ -4113,21 +5565,91 @@ function App() {
     ) || "/";
 
 
+  /*
+   * Restore the last application stage and
+   * selected API service IDs when the page is
+   * refreshed during the same browser session.
+   */
+  const [
+    initialAppSession,
+  ] = useState<AppSessionState>(
+    () => readAppSession(),
+  );
+
+
   const [
     apiSetupComplete,
     setApiSetupComplete,
-  ] = useState(false);
+  ] = useState(
+    initialAppSession.apiSetupComplete,
+  );
 
 
   const [
     selectedApiKeys,
     setSelectedApiKeys,
-  ] = useState<string[]>([]);
+  ] = useState<string[]>(
+    initialAppSession.selectedApiKeys,
+  );
+
+
+  const [
+    selectedApiServices,
+    setSelectedApiServices,
+  ] = useState<SelectedApiService[]>(
+    initialAppSession.selectedApiServices,
+  );
+
+  const [
+    availableApiServices,
+    setAvailableApiServices,
+  ] = useState<SelectedApiService[]>(
+    initialAppSession.availableApiServices,
+  );
+
+
+  /*
+   * Keep BOTH screens mounted.
+   *
+   * This is important: when the user goes from
+   * Image Generator back to API Setup, the
+   * ImageGenerator component is hidden rather
+   * than destroyed. Therefore all of its current
+   * reference, template, prompt, output and UI
+   * state remains exactly where the user left it.
+   */
+  const showApiSetup =
+    !apiSetupComplete;
+
+  const showImageGenerator =
+    apiSetupComplete;
+
+
+  /*
+   * Keep the browser-session state synchronized.
+   * This stores only service IDs and navigation
+   * state, never the actual API credentials.
+   */
+  useEffect(() => {
+    writeAppSession({
+      apiSetupComplete,
+      selectedApiKeys,
+      selectedApiServices,
+      availableApiServices,
+    });
+  }, [
+    apiSetupComplete,
+    selectedApiKeys,
+    selectedApiServices,
+    availableApiServices,
+  ]);
 
 
   if (
     currentPath ===
-    "/project-manager"
+      "/project-manager" ||
+    currentPath ===
+      "/projectmanager"
   ) {
     return (
       <ProjectManager />
@@ -4135,38 +5657,103 @@ function App() {
   }
 
 
-  if (!apiSetupComplete) {
-
-    return (
-      <ApiKeySetup
-        onComplete={(
-          selectedKeys,
-        ) => {
-
-          setSelectedApiKeys(
-            selectedKeys,
-          );
-
-          setApiSetupComplete(
-            true,
-          );
-
-        }}
-      />
-    );
-  }
-
+;
 
   return (
-    <ImageGenerator
-      selectedApiKeys={
-        selectedApiKeys
-      }
-      onBackToApiSetup={() => {
-        setSelectedApiKeys([]);
-        setApiSetupComplete(false);
-      }}
-    />
+    <>
+      <div
+        style={{
+          display:
+            showApiSetup
+              ? "block"
+              : "none",
+        }}
+        aria-hidden={
+          !showApiSetup
+        }
+      >
+        <ApiKeySetup
+          onComplete={(
+            selectedKeys,
+            selectedServices,
+          ) => {
+
+            /*
+             * Do NOT clear anything when moving
+             * between API Setup and Image Generator.
+             */
+            // API selection happens only in the Image Generator header.
+            setSelectedApiKeys([]);
+            setSelectedApiServices([]);
+            setAvailableApiServices(selectedServices);
+
+            setApiSetupComplete(
+              true,
+            );
+
+          }}
+        />
+      </div>
+
+
+      <div
+        style={{
+          display:
+            showImageGenerator
+              ? "block"
+              : "none",
+        }}
+        aria-hidden={
+          !showImageGenerator
+        }
+      >
+        <ImageGenerator
+          selectedApiKeys={
+            selectedApiKeys
+          }
+          selectedApiServices={
+            selectedApiServices
+          }
+          availableApiServices={
+            availableApiServices
+          }
+          onApiSelectionChange={(nextSelectedIds) => {
+            setSelectedApiKeys(nextSelectedIds);
+            setSelectedApiServices(
+              availableApiServices.filter((service) =>
+                nextSelectedIds.includes(service.id),
+              ),
+            );
+            void fetch(`${API_BASE_URL}/api/api-keys/select`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ selected_ids: nextSelectedIds }),
+            }).then(async (response) => {
+              if (!response.ok) {
+                const data = await response.json().catch(() => null);
+                throw new Error(String(data?.detail || "Unable to update API selection."));
+              }
+            }).catch((error) => {
+              console.error("API selection update failed:", error);
+            });
+          }}
+          onBackToApiSetup={() => {
+
+            /*
+             * IMPORTANT:
+             * Do not clear selectedApiKeys.
+             * Do not destroy ImageGenerator.
+             *
+             * Only switch the visible stage.
+             */
+            setApiSetupComplete(
+              false,
+            );
+
+          }}
+        />
+      </div>
+    </>
   );
 }
 

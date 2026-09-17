@@ -75,6 +75,52 @@ export interface GeneratedTemplate {
     order: number;
   }>;
 
+  text_groups?: Array<{
+    id: string;
+    role: string;
+    text: string;
+    element_ids: string[];
+    bbox: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
+    line_count: number;
+    lines: Array<{
+      element_id: string;
+      text: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      font_size: number;
+      font_family: string;
+      font_weight: string;
+      alignment: string;
+      color: string;
+      uppercase: boolean;
+      line_spacing: number;
+    }>;
+  }>;
+
+  text_elements?: Array<{
+    id: string;
+    text: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    font_size: number;
+    font_family: string;
+    font_weight: string;
+    alignment: string;
+    color: string;
+    uppercase: boolean;
+    line_spacing: number;
+    confidence: number;
+  }>;
+
   style: {
     keywords: string[];
 
