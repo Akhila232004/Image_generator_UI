@@ -36,5 +36,533 @@
   "drive:1u9eUS2bRksCT3B2SXje_5tb0FMojgI9x": {
     "tag": "SQL Database Management System",
     "filename": "drive_1u9eUS2bRksCT3B2SXje_5tb0FMojgI9x_SQL-server-training.jpg"
+  },
+  "drive_1avdqENjYAUflx6aT_M84szQW8w_AWWL9_acid_properties.jpg": {
+    "tag": "ACID Properties in SQL",
+    "filename": "drive_1avdqENjYAUflx6aT_M84szQW8w_AWWL9_acid_properties.jpg"
+  },
+  "drive_1Rs4qKKLGr4diVvE8IFxH4nBpk1zlV96u_adf.jpg": {
+    "tag": "Azure Data Factory Roadmap",
+    "filename": "drive_1Rs4qKKLGr4diVvE8IFxH4nBpk1zlV96u_adf.jpg"
+  },
+  "drive_1SpbH508O0iGBP01LXQOCNEJNpMpE8SN2_agentic_Data_pipeline.gif": {
+    "tag": "Agentic Data Pipeline Patterns Infographic",
+    "filename": "drive_1SpbH508O0iGBP01LXQOCNEJNpMpE8SN2_agentic_Data_pipeline.gif"
+  },
+  "drive_1fWQRHaRRz3cAOUInO5hw-P3jJd9phhsm_AI ecosystem.jpg": {
+    "tag": "Artificial Intelligence Ecosystem Diagram",
+    "filename": "drive_1fWQRHaRRz3cAOUInO5hw-P3jJd9phhsm_AI ecosystem.jpg"
+  },
+  "drive_1YfQS5W4Bp_z5R9KVJWuXGeyXxxSrb4dW_ai tools.jpg": {
+    "tag": "Software Tool Replacement Comparison",
+    "filename": "drive_1YfQS5W4Bp_z5R9KVJWuXGeyXxxSrb4dW_ai tools.jpg"
+  },
+  "drive_165OZ8Pm_P8QpkbkWCoxRzEe6AQX5zUYK_AI_Disciplines.gif": {
+    "tag": "Artificial Intelligence Disciplines Comparison Infographic",
+    "filename": "drive_165OZ8Pm_P8QpkbkWCoxRzEe6AQX5zUYK_AI_Disciplines.gif"
+  },
+  "drive_1NihrcjZHkDrLkURc6ywftQlASSSM1xoq_AI_Stack.gif": {
+    "tag": "Artificial Intelligence Tech Stack Ecosystem",
+    "filename": "drive_1NihrcjZHkDrLkURc6ywftQlASSSM1xoq_AI_Stack.gif"
+  },
+  "drive_17w3oDfI5rBUr4VwVqZzTU_XAXgahKdWJ_architecture_data_engineering.gif": {
+    "tag": "Data Engineering Architectures Overview",
+    "filename": "drive_17w3oDfI5rBUr4VwVqZzTU_XAXgahKdWJ_architecture_data_engineering.gif"
+  },
+  "drive_1cnBLnVBkXVQ98Y0zNhqPOACzbqpNexsI_Architecture_DE.jpg": {
+    "tag": "Data Engineering Architectures Comparison",
+    "filename": "drive_1cnBLnVBkXVQ98Y0zNhqPOACzbqpNexsI_Architecture_DE.jpg"
+  },
+  "drive_1jvKDbjopU79PDIZPukG3PkVw7auoezKF_Architecture_diff_DE.jpg": {
+    "tag": "Data Architecture Comparison Chart",
+    "filename": "drive_1jvKDbjopU79PDIZPukG3PkVw7auoezKF_Architecture_diff_DE.jpg"
+  },
+  "drive_1hFdbRCsOEjAhysZQZXNbjcyz--_xonpC_autoloader_Databaricks.jpg": {
+    "tag": "Databricks Auto Loader Infographic",
+    "filename": "drive_1hFdbRCsOEjAhysZQZXNbjcyz--_xonpC_autoloader_Databaricks.jpg"
+  },
+  "drive_1Y81TMDZjSIX99YeUvfUMRmYaLUZbq5fa_AWS_Concepts_DE.jpg": {
+    "tag": "AWS Cloud Services Roadmap",
+    "filename": "drive_1Y81TMDZjSIX99YeUvfUMRmYaLUZbq5fa_AWS_Concepts_DE.jpg"
+  },
+  "drive_1VKkzLtgdBEJan2YL4HXm6Lek125keQTc_aws_internal_deve;oper_platform.jpg": {
+    "tag": "Internal Developer Platform on AWS",
+    "filename": "drive_1VKkzLtgdBEJan2YL4HXm6Lek125keQTc_aws_internal_deve;oper_platform.jpg"
+  },
+  "drive_1RZE7MNeTrddV-2SZYBAB2knj_4K4SoKQ_aws_services.jpg": {
+    "tag": "AWS Services Comparison Infographic",
+    "filename": "drive_1RZE7MNeTrddV-2SZYBAB2knj_4K4SoKQ_aws_services.jpg"
+  },
+  "drive_1i_wMLV9rS8R7aQN7Lh5BkXU7iiJjxyjG_azure)tech_stack.gif": {
+    "tag": "Azure Data Engineering Tech Stack",
+    "filename": "drive_1i_wMLV9rS8R7aQN7Lh5BkXU7iiJjxyjG_azure)tech_stack.gif"
+  },
+  "drive_1kX2YhFhduppg3Hs1ib5dTZD9CVrHmNbP_Azure_cheatsheet.jpg": {
+    "tag": "Azure Data Factory Cheat Sheet",
+    "filename": "drive_1kX2YhFhduppg3Hs1ib5dTZD9CVrHmNbP_Azure_cheatsheet.jpg"
+  },
+  "drive_1yACuwbvVa9HbOR1ZqIITwwhSVEIbrMgX_azure_de.jpg": {
+    "tag": "Azure Data Engineer Requirements",
+    "filename": "drive_1yACuwbvVa9HbOR1ZqIITwwhSVEIbrMgX_azure_de.jpg"
+  },
+  "drive_1rBLe0vNctI8VQVfRniwbJo5coZYSGiI3_cdc.gif": {
+    "tag": "Data Change Capture Methods Infographic",
+    "filename": "drive_1rBLe0vNctI8VQVfRniwbJo5coZYSGiI3_cdc.gif"
+  },
+  "drive_1bERMD8QB3OzoooJH-y4zE2gpfnS7B5gh_cheatsheet_DE.jpg": {
+    "tag": "Data Engineer Cheat Sheet",
+    "filename": "drive_1bERMD8QB3OzoooJH-y4zE2gpfnS7B5gh_cheatsheet_DE.jpg"
+  },
+  "drive_1WvwvRq8JheJAYy_yKQwgBBDq4N_-Tdgt_cheatsheet_SQL.jpg": {
+    "tag": "SQL Cheat Sheet",
+    "filename": "drive_1WvwvRq8JheJAYy_yKQwgBBDq4N_-Tdgt_cheatsheet_SQL.jpg"
+  },
+  "drive_1S9iP2OH5z0PFnDm9ybKBPa3HS3P1oTcH_cloud_arch.gif": {
+    "tag": "Cloud Architecture Wheel",
+    "filename": "drive_1S9iP2OH5z0PFnDm9ybKBPa3HS3P1oTcH_cloud_arch.gif"
+  },
+  "drive_1_tqA1-jrZ4wNU3Br0h1lzZkGug7NZ8iV_cloud_arcthitecture.gif": {
+    "tag": "Cloud Data Warehouse Architectures",
+    "filename": "drive_1_tqA1-jrZ4wNU3Br0h1lzZkGug7NZ8iV_cloud_arcthitecture.gif"
+  },
+  "drive_11E0Ex85At8TirUayUVwYnJyhVPQBqlRb_cloud_data_engineering.gif": {
+    "tag": "Cloud Data Engineering Services Comparison",
+    "filename": "drive_11E0Ex85At8TirUayUVwYnJyhVPQBqlRb_cloud_data_engineering.gif"
+  },
+  "drive_1Eq_uOiBgYoIHg-1C-yir1ZRpWW_6PVwE_Cloud_Data_Pipelines.jpg": {
+    "tag": "Cloud Data Pipeline Architecture",
+    "filename": "drive_1Eq_uOiBgYoIHg-1C-yir1ZRpWW_6PVwE_Cloud_Data_Pipelines.jpg"
+  },
+  "drive_1-TSruaD9cXLZQfnG4v7LF8r4hBh5pAan_cloud_data_platform.gif": {
+    "tag": "Types of Cloud Data Platform",
+    "filename": "drive_1-TSruaD9cXLZQfnG4v7LF8r4hBh5pAan_cloud_data_platform.gif"
+  },
+  "drive_1b34oCJ1PJp4Qod8RrVICEKMcxvo5ZHC7_Cloud_Pipeline.jpg": {
+    "tag": "Data Engineering Tool Architecture",
+    "filename": "drive_1b34oCJ1PJp4Qod8RrVICEKMcxvo5ZHC7_Cloud_Pipeline.jpg"
+  },
+  "drive_1KH7wSP-jgzalep81Ef8AzikErrRCJOGq_cloud_services.jpg": {
+    "tag": "Cloud Data Pipeline Comparison",
+    "filename": "drive_1KH7wSP-jgzalep81Ef8AzikErrRCJOGq_cloud_services.jpg"
+  },
+  "drive_1XAKfpbp9IWY3u8TsEjc7nb--SNLgon4-_cloud_services_mapping.jpg": {
+    "tag": "Cloud Services Mapping Comparison Table",
+    "filename": "drive_1XAKfpbp9IWY3u8TsEjc7nb--SNLgon4-_cloud_services_mapping.jpg"
+  },
+  "drive_1GnCqlQmRbcw7Y9U-TSDGGeXaDEBN9vDz_cluster_databricks.jpg": {
+    "tag": "Databricks Cluster Sizing Cheat Sheet",
+    "filename": "drive_1GnCqlQmRbcw7Y9U-TSDGGeXaDEBN9vDz_cluster_databricks.jpg"
+  },
+  "drive_1VqofB864MgkrYgKs7AsSeTEz3ahrshV6_data analytics workflow.gif": {
+    "tag": "Data Analytics Workflow Guide",
+    "filename": "drive_1VqofB864MgkrYgKs7AsSeTEz3ahrshV6_data analytics workflow.gif"
+  },
+  "drive_1u2WTYUn2yXEMhfQhSpNfbah2B4AfCijc_Data_analyst_Data_engg.gif": {
+    "tag": "Data Analyst To Data Engineer",
+    "filename": "drive_1u2WTYUn2yXEMhfQhSpNfbah2B4AfCijc_Data_analyst_Data_engg.gif"
+  },
+  "drive_1IYpYv-VE4G2L3YvnQUyqPn3Bs5LPxArv_data_Arch_layer.jpg": {
+    "tag": "Four Layers Of Data Architecture",
+    "filename": "drive_1IYpYv-VE4G2L3YvnQUyqPn3Bs5LPxArv_data_Arch_layer.jpg"
+  },
+  "drive_10Q_pJo-CJ9rHallw3POU4XVggJkBG2du_data_Arch_patterns.gif": {
+    "tag": "Modern Data Architecture Patterns",
+    "filename": "drive_10Q_pJo-CJ9rHallw3POU4XVggJkBG2du_data_Arch_patterns.gif"
+  },
+  "drive_16-4LRQs11i7wNG9HpE4K7r6DYfcpE9V2_data_architects.jpg": {
+    "tag": "Infographic Comparing Data Architect Roles",
+    "filename": "drive_16-4LRQs11i7wNG9HpE4K7r6DYfcpE9V2_data_architects.jpg"
+  },
+  "drive_1YkEcCHCmEGbtFPS-ASUgbVaX7VZZGG3b_Data_engg_concepts.gif": {
+    "tag": "Data Engineering Concepts Infographic",
+    "filename": "drive_1YkEcCHCmEGbtFPS-ASUgbVaX7VZZGG3b_Data_engg_concepts.gif"
+  },
+  "drive_17bEpvUZX2_w8vEho28kv00b3-hevmQxd_data_Engg_journey.jpg": {
+    "tag": "Data Engineer Evolving Journey",
+    "filename": "drive_17bEpvUZX2_w8vEho28kv00b3-hevmQxd_data_Engg_journey.jpg"
+  },
+  "drive_1W2ZJrpONRHnd60f8HbsTwsnJ0dACrT7B_Data_engineering_concepts.gif": {
+    "tag": "Data Engineering Concepts Infographic",
+    "filename": "drive_1W2ZJrpONRHnd60f8HbsTwsnJ0dACrT7B_Data_engineering_concepts.gif"
+  },
+  "drive_1cohzbI3R6GCH5xHS7U1zS9y35DSNTkrY_Data_Engineering_fundamentals.jpg": {
+    "tag": "Data Engineering Concepts Comparison",
+    "filename": "drive_1cohzbI3R6GCH5xHS7U1zS9y35DSNTkrY_Data_Engineering_fundamentals.jpg"
+  },
+  "drive_1Z3VyX8QIl6UUmU5uK0d6WuxSHpB10GRR_data_engineering_roadmap.jpg": {
+    "tag": "Data Engineer Roadmap",
+    "filename": "drive_1Z3VyX8QIl6UUmU5uK0d6WuxSHpB10GRR_data_engineering_roadmap.jpg"
+  },
+  "drive_1W61lblQh7wyYryloQ04LaIDOO1lADmFS_Data_Engineering_Terminologies.jpg": {
+    "tag": "Data Engineering Terminology Guide",
+    "filename": "drive_1W61lblQh7wyYryloQ04LaIDOO1lADmFS_Data_Engineering_Terminologies.jpg"
+  },
+  "drive_1KbwTGe810sUAEUQGiAuULokvo_WAoK4a_data_enginner.jpg": {
+    "tag": "Evolution Of Data Engineering",
+    "filename": "drive_1KbwTGe810sUAEUQGiAuULokvo_WAoK4a_data_enginner.jpg"
+  },
+  "drive_1PFmDIzehXSnXWCfPin4a2gv99eZEt8LL_data_fabric.jpg": {
+    "tag": "Data Fabric Paradigm Comparison",
+    "filename": "drive_1PFmDIzehXSnXWCfPin4a2gv99eZEt8LL_data_fabric.jpg"
+  },
+  "drive_168USdQzyZbQeAvb6tTl6swu7NEJ0gUeD_data_migration_patterns.gif": {
+    "tag": "Top Data Migration Patterns",
+    "filename": "drive_168USdQzyZbQeAvb6tTl6swu7NEJ0gUeD_data_migration_patterns.gif"
+  },
+  "drive_1aQGsw2pEvYOlbytI1KMW92bjDwpjqZBr_data_pipeline.gif": {
+    "tag": "Data Pipeline Patterns Infographic",
+    "filename": "drive_1aQGsw2pEvYOlbytI1KMW92bjDwpjqZBr_data_pipeline.gif"
+  },
+  "drive_13B0ZgKIJDajJWfrns6uDpWBMWwNDcEhK_data_pipeline_pattern.gif": {
+    "tag": "Top Data Pipeline Patterns",
+    "filename": "drive_13B0ZgKIJDajJWfrns6uDpWBMWwNDcEhK_data_pipeline_pattern.gif"
+  },
+  "drive_1ubWNB_AsrG9pSV7rFBeko6V6WglHXwKg_data_platform.gif": {
+    "tag": "Top Data Platforms Explained",
+    "filename": "drive_1ubWNB_AsrG9pSV7rFBeko6V6WglHXwKg_data_platform.gif"
+  },
+  "drive_1BWvg5cB1sv0ojk5NtcaKJxa-MuhHf82H_data_platform_works.gif": {
+    "tag": "Data Platform Architecture Diagram",
+    "filename": "drive_1BWvg5cB1sv0ojk5NtcaKJxa-MuhHf82H_data_platform_works.gif"
+  },
+  "drive_1JeQSMUoGZnh8TcHXfS74-3rQinE2ZqOR_data_quality_check.jpg": {
+    "tag": "Data Quality Checks List",
+    "filename": "drive_1JeQSMUoGZnh8TcHXfS74-3rQinE2ZqOR_data_quality_check.jpg"
+  },
+  "drive_1I3SzZrOPiOxkvFIin5gE7cykqvWoPgGx_data_quality_check_sql.jpg": {
+    "tag": "SQL Data Quality Checks",
+    "filename": "drive_1I3SzZrOPiOxkvFIin5gE7cykqvWoPgGx_data_quality_check_sql.jpg"
+  },
+  "drive_1UkfGS3sP_zqAKsBaWun5AkhvFv_Dfs4S_database_migration.jpg": {
+    "tag": "Database Migration Steps Infographic",
+    "filename": "drive_1UkfGS3sP_zqAKsBaWun5AkhvFv_Dfs4S_database_migration.jpg"
+  },
+  "drive_1-eXg6FYNE3XW4MA80oxiw0k1PtkXLW2-_databricks loaders.jpg": {
+    "tag": "Databricks Auto Loader Infographic",
+    "filename": "drive_1-eXg6FYNE3XW4MA80oxiw0k1PtkXLW2-_databricks loaders.jpg"
+  },
+  "drive_1FkKpzxOmWXxgmKgSwK8EAdCBQGiIXZd8_databricks_concepts.jpg": {
+    "tag": "Databricks Concepts Cheat Sheet",
+    "filename": "drive_1FkKpzxOmWXxgmKgSwK8EAdCBQGiIXZd8_databricks_concepts.jpg"
+  },
+  "drive_1Jz5wgMaviZaRHERq4thtdJEZwjwM0Aj5_databricks_filesystem.jpg": {
+    "tag": "Databricks File System Overview Infographic",
+    "filename": "drive_1Jz5wgMaviZaRHERq4thtdJEZwjwM0Aj5_databricks_filesystem.jpg"
+  },
+  "drive_1-4jSlqnA9JPJYOdVHM47L5HJBWZHcZQ9_databricks_roadmap.jpg": {
+    "tag": "Databricks Data Engineer Roadmap",
+    "filename": "drive_1-4jSlqnA9JPJYOdVHM47L5HJBWZHcZQ9_databricks_roadmap.jpg"
+  },
+  "drive_1NuxzXmWy1LJOSw9-8itbJWztacDJ3lKR_datalake_vslake_house.jpg": {
+    "tag": "Data Lake Warehouse Comparison Diagram",
+    "filename": "drive_1NuxzXmWy1LJOSw9-8itbJWztacDJ3lKR_datalake_vslake_house.jpg"
+  },
+  "drive_1BtdhzRmDaYg0B6EHcSbnvhUXRNO1M933_datamodeling.jpg": {
+    "tag": "Data Platform Architecture Diagram",
+    "filename": "drive_1BtdhzRmDaYg0B6EHcSbnvhUXRNO1M933_datamodeling.jpg"
+  },
+  "drive_11762eWhWl1GiihunMpfk37SS15C2kPqI_dataplatform_datawarehouse.gif": {
+    "tag": "Evolution Of Data Platforms",
+    "filename": "drive_11762eWhWl1GiihunMpfk37SS15C2kPqI_dataplatform_datawarehouse.gif"
+  },
+  "drive_1aofhxdfe1UfmdDcpvepwVfYbLAK5M7FB_datastrategy.jpg": {
+    "tag": "Maturity Model Analytics Capabilities",
+    "filename": "drive_1aofhxdfe1UfmdDcpvepwVfYbLAK5M7FB_datastrategy.jpg"
+  },
+  "drive_1eZnOogjbHUmEuueZ4jOzqY2glQngy6zA_dbt.jpg": {
+    "tag": "DBT Data Build Tool Infographic",
+    "filename": "drive_1eZnOogjbHUmEuueZ4jOzqY2glQngy6zA_dbt.jpg"
+  },
+  "drive_1RbzKm8G9c2TqY5k3Sb0vmRx8oJfmeaIY_dbt_features.jpg": {
+    "tag": "Dbt Features And Functions Guide",
+    "filename": "drive_1RbzKm8G9c2TqY5k3Sb0vmRx8oJfmeaIY_dbt_features.jpg"
+  },
+  "drive_1_rbRCESbll8YNiyuWMI_y6Cx9ZzV_F4F_DBT_Snowflake.jpg": {
+    "tag": "Dbt With Snowflake Guide",
+    "filename": "drive_1_rbRCESbll8YNiyuWMI_y6Cx9ZzV_F4F_DBT_Snowflake.jpg"
+  },
+  "drive_1cCIPOHqcTJekqvdornHTVdnLUoJNmkxl_DE_comparision.jpg": {
+    "tag": "Cloud Data Engineering Comparison",
+    "filename": "drive_1cCIPOHqcTJekqvdornHTVdnLUoJNmkxl_DE_comparision.jpg"
+  },
+  "drive_1zhIfz9Ofo6F3sLiqftdflPkPT1pknu6I_DE_Concepts.gif": {
+    "tag": "Data Engineering Terms Explained",
+    "filename": "drive_1zhIfz9Ofo6F3sLiqftdflPkPT1pknu6I_DE_Concepts.gif"
+  },
+  "drive_1bpGksaqgq6sEw7RwCD0uHoSlVLc0wKww_DE_Concepts_1.gif": {
+    "tag": "Data Engineering Concepts Explained",
+    "filename": "drive_1bpGksaqgq6sEw7RwCD0uHoSlVLc0wKww_DE_Concepts_1.gif"
+  },
+  "drive_1GmSaaKcsJjie2LKs5kLKJnjSRAKCXbN6_delta_tables.jpg": {
+    "tag": "Delta Tables Learning Guide",
+    "filename": "drive_1GmSaaKcsJjie2LKs5kLKJnjSRAKCXbN6_delta_tables.jpg"
+  },
+  "drive_1cVX3NF4BZ1VgVgF4j-CNLNjo0NiMin3x_excel_for_data_analytics_10.jpg": {
+    "tag": "Handwritten Data Analysis Notes",
+    "filename": "drive_1cVX3NF4BZ1VgVgF4j-CNLNjo0NiMin3x_excel_for_data_analytics_10.jpg"
+  },
+  "drive_1FXK4e7J6qYE6lmc0xKvU4La8c9I-TkdB_excel_for_data_analytics_11.jpg": {
+    "tag": "Excel Interview Questions Guide",
+    "filename": "drive_1FXK4e7J6qYE6lmc0xKvU4La8c9I-TkdB_excel_for_data_analytics_11.jpg"
+  },
+  "drive_1HixJmhkN9pWluEaT9md9H_QjHLFWv5d1_excel_for_data_analytics_12.jpg": {
+    "tag": "Excel Cheat Sheet Guide",
+    "filename": "drive_1HixJmhkN9pWluEaT9md9H_QjHLFWv5d1_excel_for_data_analytics_12.jpg"
+  },
+  "drive_1ARhR_0MbmVpEhxZJAiTn7SW0_bkm7f6k_excel_for_data_analytics_2.jpg": {
+    "tag": "Excel Basics And Interface",
+    "filename": "drive_1ARhR_0MbmVpEhxZJAiTn7SW0_bkm7f6k_excel_for_data_analytics_2.jpg"
+  },
+  "drive_1Cd84bRk7AeTuHCla-5NY7UkjZpqxkOtS_excel_for_data_analytics_4.jpg": {
+    "tag": "Spreadsheet Functions Cheat Sheet",
+    "filename": "drive_1Cd84bRk7AeTuHCla-5NY7UkjZpqxkOtS_excel_for_data_analytics_4.jpg"
+  },
+  "drive_1c9NtawnY8zKbpl4P6p8H53Y87NuVQCqG_kafka_de.gif": {
+    "tag": "Top Kafka Use Cases",
+    "filename": "drive_1c9NtawnY8zKbpl4P6p8H53Y87NuVQCqG_kafka_de.gif"
+  },
+  "drive_1Gwz_uddZgDx3lIpPc1Dk9orCebCJiG8J_Joins_DE.gif": {
+    "tag": "SQL Joins Types Infographic",
+    "filename": "drive_1Gwz_uddZgDx3lIpPc1Dk9orCebCJiG8J_Joins_DE.gif"
+  },
+  "drive_1HpI4a633t23h2bsuo7AcembXlMWTFECV_late_ariving_data_stream.jpg": {
+    "tag": "Streaming Data Watermarks Infographic",
+    "filename": "drive_1HpI4a633t23h2bsuo7AcembXlMWTFECV_late_ariving_data_stream.jpg"
+  },
+  "drive_1M50T9F3oDXZR3tHUVkEpZL2o6yggbmsp_LM_RAG_AI_Agent_Agentic_AI.gif": {
+    "tag": "Generative Versus Agentic Intelligence",
+    "filename": "drive_1M50T9F3oDXZR3tHUVkEpZL2o6yggbmsp_LM_RAG_AI_Agent_Agentic_AI.gif"
+  },
+  "drive_1RIkTz6Bk7LBOSDl-ri6vRKxgMIotE4TI_kafka_airflow_DE.gif": {
+    "tag": "Data Pipeline System Architecture",
+    "filename": "drive_1RIkTz6Bk7LBOSDl-ri6vRKxgMIotE4TI_kafka_airflow_DE.gif"
+  },
+  "drive_1spufUWw60N47OZQe89jsbgB6RovC-zS1_medillian_architecture.gif": {
+    "tag": "Medallion Versus Data Mesh",
+    "filename": "drive_1spufUWw60N47OZQe89jsbgB6RovC-zS1_medillian_architecture.gif"
+  },
+  "drive_1bfiOdCzqZpUOXdzG1e214xJHiv3x7CnN_lakehouse_vs_datawarehouse.gif": {
+    "tag": "Data Storage Architecture Comparison",
+    "filename": "drive_1bfiOdCzqZpUOXdzG1e214xJHiv3x7CnN_lakehouse_vs_datawarehouse.gif"
+  },
+  "drive_13enuPirpnTINKcGc_P9DmuSfPhCsCCzX_snowflake_concepts.jpg": {
+    "tag": "Snowflake Data Engineering Concepts",
+    "filename": "drive_13enuPirpnTINKcGc_P9DmuSfPhCsCCzX_snowflake_concepts.jpg"
+  },
+  "drive_1QA1duwbOYyB_ifJMx1bMYItUHHcZ-9wN_sql_data_rejected.jpg": {
+    "tag": "SQL Interview Question Graphic",
+    "filename": "drive_1QA1duwbOYyB_ifJMx1bMYItUHHcZ-9wN_sql_data_rejected.jpg"
+  },
+  "drive_1t1Mt29_UbakDatjOTEQo1jmHa5y-gDMw_sql_execution.gif": {
+    "tag": "Sql Execution Order Infographic",
+    "filename": "drive_1t1Mt29_UbakDatjOTEQo1jmHa5y-gDMw_sql_execution.gif"
+  },
+  "drive_1CPxY2R4VsOZ8z2Dxv5hFrEZFZddpPTmE_snowflake_features.jpg": {
+    "tag": "Snowflake Features Infographic",
+    "filename": "drive_1CPxY2R4VsOZ8z2Dxv5hFrEZFZddpPTmE_snowflake_features.jpg"
+  },
+  "drive_1RBwgQNFDjISDEPtkfDUQNvHovxk8PD6N_de_fundamentals.jpg": {
+    "tag": "Data Engineering Fundamentals Notes",
+    "filename": "drive_1RBwgQNFDjISDEPtkfDUQNvHovxk8PD6N_de_fundamentals.jpg"
+  },
+  "drive_1Gai-NA3zRcRU9IbxhyXz1rzfseKl_rBO_DE_Orchestration.jpg": {
+    "tag": "Apache Spark Data Architecture",
+    "filename": "drive_1Gai-NA3zRcRU9IbxhyXz1rzfseKl_rBO_DE_Orchestration.jpg"
+  },
+  "drive_1k2_bCS38AASww1rNq3PoEsbJRnrvMJbs_excel_for_data_analytics_9.jpg": {
+    "tag": "Power Query Basics Study Notes",
+    "filename": "drive_1k2_bCS38AASww1rNq3PoEsbJRnrvMJbs_excel_for_data_analytics_9.jpg"
+  },
+  "drive_1wmSOEjwYRvKA_C4tNrR680ABviwtSRxm_fabric_vs_foundry.jpg": {
+    "tag": "Microsoft Fabric Foundry Integration",
+    "filename": "drive_1wmSOEjwYRvKA_C4tNrR680ABviwtSRxm_fabric_vs_foundry.jpg"
+  },
+  "drive_1QYGTV3gjEUlKAMrvqUVIMZM6iWJy1jkM_file_formats.jpg": {
+    "tag": "Data File Formats Guide",
+    "filename": "drive_1QYGTV3gjEUlKAMrvqUVIMZM6iWJy1jkM_file_formats.jpg"
+  },
+  "drive_1Mk4xmomAnvfCjG0KafOTUWFYkkGE1GPT_full_de_sql.gif": {
+    "tag": "Data Engineering Project Lifecycle",
+    "filename": "drive_1Mk4xmomAnvfCjG0KafOTUWFYkkGE1GPT_full_de_sql.gif"
+  },
+  "drive_1lRS9o_Z1SxuCtG-ndVowURnlpEUAsxYq_html.jpg": {
+    "tag": "Common HTTP Status Codes Infographic",
+    "filename": "drive_1lRS9o_Z1SxuCtG-ndVowURnlpEUAsxYq_html.jpg"
+  },
+  "drive_15dfdmgs6WDw7_vt_GnVMLAmNqhMQNm8a_interview_questions_DE.jpg": {
+    "tag": "Data Engineering Interview Questions",
+    "filename": "drive_15dfdmgs6WDw7_vt_GnVMLAmNqhMQNm8a_interview_questions_DE.jpg"
+  },
+  "drive_1uY-zYe0R3jhXqMLF72NZZDqOFEZNhlrg_Join_DE.jpg": {
+    "tag": "SQL Joins Explained Visually",
+    "filename": "drive_1uY-zYe0R3jhXqMLF72NZZDqOFEZNhlrg_Join_DE.jpg"
+  },
+  "drive_1eWdROHEjILtrzNVaO23sb1GNPZhfcugr_joins_sql.gif": {
+    "tag": "SQL Joins Cheatsheet",
+    "filename": "drive_1eWdROHEjILtrzNVaO23sb1GNPZhfcugr_joins_sql.gif"
+  },
+  "drive_1DB1lxaKAsS66UfCqNiRXOV4SDfKu40p7_master_data_engineering_cheatsheet.gif": {
+    "tag": "Data Engineering Roadmap Infographic",
+    "filename": "drive_1DB1lxaKAsS66UfCqNiRXOV4SDfKu40p7_master_data_engineering_cheatsheet.gif"
+  },
+  "drive_16kyHH41C-t1pin31uMCpwyrBn8MTtaKh_no_code_Rag.gif": {
+    "tag": "No Code RAG Infographic",
+    "filename": "drive_16kyHH41C-t1pin31uMCpwyrBn8MTtaKh_no_code_Rag.gif"
+  },
+  "drive_1Jf_NOG8jtnm9P3agvg_J6wPGNQEi5EAI_OLTP_OLAP_SQL.jpg": {
+    "tag": "OLTP Versus OLAP Comparison",
+    "filename": "drive_1Jf_NOG8jtnm9P3agvg_J6wPGNQEi5EAI_OLTP_OLAP_SQL.jpg"
+  },
+  "drive_1ALgHOUre2XLY6sOL8bDNmitBXE04mgqk_orchestration.jpg": {
+    "tag": "Data Pipeline Automation Architecture",
+    "filename": "drive_1ALgHOUre2XLY6sOL8bDNmitBXE04mgqk_orchestration.jpg"
+  },
+  "drive_16lBF440vrIO1oaQ88AdvIIRh7TyphZqV_Partitioning_DE.jpg": {
+    "tag": "Partitioning And Clustering Triggers",
+    "filename": "drive_16lBF440vrIO1oaQ88AdvIIRh7TyphZqV_Partitioning_DE.jpg"
+  },
+  "drive_1KgPjn9kWHVPbBRmQrhlvJL52G_Z6U7C-_Project_ideas.jpg": {
+    "tag": "Data Engineering Project Ideas",
+    "filename": "drive_1KgPjn9kWHVPbBRmQrhlvJL52G_Z6U7C-_Project_ideas.jpg"
+  },
+  "drive_1G24e1LBwHf87UFsiB8eo5uro-TpePbpT_pyspark_cheatsheet.jpg": {
+    "tag": "PySpark Cheatsheet Data Engineering",
+    "filename": "drive_1G24e1LBwHf87UFsiB8eo5uro-TpePbpT_pyspark_cheatsheet.jpg"
+  },
+  "drive_1sr9vDsO2uSIuIc4BwD_jCSWsDC17qvoA_query_execution_order_sql.gif": {
+    "tag": "SQL Execution Order Infographic",
+    "filename": "drive_1sr9vDsO2uSIuIc4BwD_jCSWsDC17qvoA_query_execution_order_sql.gif"
+  },
+  "drive_16VI9bL3TZXzffLAEhVJD5EJRi1SeIwoe_right_Database.jpg": {
+    "tag": "AWS Database Selection Guide",
+    "filename": "drive_16VI9bL3TZXzffLAEhVJD5EJRi1SeIwoe_right_Database.jpg"
+  },
+  "drive_1xi6cjh9SeWEziHqFDxLvwCHm6kPU1I0S_roadmap_de.jpg": {
+    "tag": "Roadmap To Become A Data",
+    "filename": "drive_1xi6cjh9SeWEziHqFDxLvwCHm6kPU1I0S_roadmap_de.jpg"
+  },
+  "drive_1DbbxtERskzCLLe_p8U90Jei2jliV6_Qa_scenario_based_time_questions.jpg": {
+    "tag": "Time Series SQL Notes",
+    "filename": "drive_1DbbxtERskzCLLe_p8U90Jei2jliV6_Qa_scenario_based_time_questions.jpg"
+  },
+  "drive_1VRfvdmWCfAm6Ip3hRCgsw1N_7Xn8PH26_schema_in_de.jpg": {
+    "tag": "Handwritten Schemas In Data Engineering",
+    "filename": "drive_1VRfvdmWCfAm6Ip3hRCgsw1N_7Xn8PH26_schema_in_de.jpg"
+  },
+  "drive_1n9OBfjLJ5CzndhY0OwGlC1SXsDyld8H2_snowflak.jpg": {
+    "tag": "Infographic Explaining Snowflake Platform",
+    "filename": "drive_1n9OBfjLJ5CzndhY0OwGlC1SXsDyld8H2_snowflak.jpg"
+  },
+  "drive_1XKRkgIyugk_9GJEZ3s1vuMLA6a0yaVPd_snowflake_cheatsheet.jpg": {
+    "tag": "Snowflake Learning Cheat Sheet",
+    "filename": "drive_1XKRkgIyugk_9GJEZ3s1vuMLA6a0yaVPd_snowflake_cheatsheet.jpg"
+  },
+  "drive_1jzaXYSEIrYckKwE_ln6jr3WYil71GorB_snowflake_dbt.jpg": {
+    "tag": "Snowflake And Dbt Architecture",
+    "filename": "drive_1jzaXYSEIrYckKwE_ln6jr3WYil71GorB_snowflake_dbt.jpg"
+  },
+  "drive_1KpxSIjXZLiXwo_rsHIo6FXSKuK_IFvwp_snowflake_dbt_etl.jpg": {
+    "tag": "Real World ETL Pipeline",
+    "filename": "drive_1KpxSIjXZLiXwo_rsHIo6FXSKuK_IFvwp_snowflake_dbt_etl.jpg"
+  },
+  "drive_1Gd2g1sB0-rcQvw_I2V_XqmDUKQZtIx3M_sql_commands.jpg": {
+    "tag": "SQL Commands Classification Infographic",
+    "filename": "drive_1Gd2g1sB0-rcQvw_I2V_XqmDUKQZtIx3M_sql_commands.jpg"
+  },
+  "drive_16Q9wNcFO7VYpuKldPFuF7lIielSf2VmR_sql_execution_order.gif": {
+    "tag": "SQL Query Execution Order",
+    "filename": "drive_16Q9wNcFO7VYpuKldPFuF7lIielSf2VmR_sql_execution_order.gif"
+  },
+  "drive_1CLElk0JPrlUZj1EBOwvwdjWpoLabT3_E_sql_guide.jpg": {
+    "tag": "SQL Quick Reference Guide",
+    "filename": "drive_1CLElk0JPrlUZj1EBOwvwdjWpoLabT3_E_sql_guide.jpg"
+  },
+  "drive_1ajd4nOWy6HEF29PfmriCYds5liaT_kn6_sql_joins.gif": {
+    "tag": "SQL Joins Cheat Sheet",
+    "filename": "drive_1ajd4nOWy6HEF29PfmriCYds5liaT_kn6_sql_joins.gif"
+  },
+  "drive_1DGgMRWXPLZFweXZqhgXbvT9b5J_cUkbj_sql_python_excel.jpg": {
+    "tag": "SQL Python Excel Reference Table",
+    "filename": "drive_1DGgMRWXPLZFweXZqhgXbvT9b5J_cUkbj_sql_python_excel.jpg"
+  },
+  "drive_1G-LVxNRcUIjksHJlCfS768ecsLUqwZMa_sql_query_logical_order.gif": {
+    "tag": "SQL Query Logical Order",
+    "filename": "drive_1G-LVxNRcUIjksHJlCfS768ecsLUqwZMa_sql_query_logical_order.gif"
+  },
+  "drive_11KWEseimNoIaXKIwF1WWeMPrOATYiOsF_sql_roadmap.jpg": {
+    "tag": "SQL Roadmap Infographic",
+    "filename": "drive_11KWEseimNoIaXKIwF1WWeMPrOATYiOsF_sql_roadmap.jpg"
+  },
+  "drive_1VBdjvm0fR9-F4cw4gidgUaQowI_WtHvE_sql_vs_python.jpg": {
+    "tag": "SQL Versus Python Comparison Guide",
+    "filename": "drive_1VBdjvm0fR9-F4cw4gidgUaQowI_WtHvE_sql_vs_python.jpg"
+  },
+  "drive_1za8yzyAXiFu3p2xhNdVCxW6dXk72k0xR_windows_DE.jpg": {
+    "tag": "SQL Window Functions Cheatsheet",
+    "filename": "drive_1za8yzyAXiFu3p2xhNdVCxW6dXk72k0xR_windows_DE.jpg"
+  },
+  "drive_1uqinpRrWlAHtR-R0OjioRitI7xGFuKM9_windows_functions.jpg": {
+    "tag": "SQL Window Functions Guide",
+    "filename": "drive_1uqinpRrWlAHtR-R0OjioRitI7xGFuKM9_windows_functions.jpg"
+  },
+  "drive_1CFwFwMe-lumOGd_dbCfry9a8HesM5ldM_DE_vs_SE.gif": {
+    "tag": "Data Engineer Software Engineer Tech",
+    "filename": "drive_1CFwFwMe-lumOGd_dbCfry9a8HesM5ldM_DE_vs_SE.gif"
+  },
+  "drive_1XYP5hHlcYhuK4d2LncaVvjqhxsCPoIWh_Devops_DE.gif": {
+    "tag": "Data Engineering Overview Map",
+    "filename": "drive_1XYP5hHlcYhuK4d2LncaVvjqhxsCPoIWh_Devops_DE.gif"
+  },
+  "drive_1vgRDZ9rGSbnP9JoDIz_gT3BkPcQuk1M6_DL_DW_Lake_house.gif": {
+    "tag": "Data Storage Systems Comparison",
+    "filename": "drive_1vgRDZ9rGSbnP9JoDIz_gT3BkPcQuk1M6_DL_DW_Lake_house.gif"
+  },
+  "drive_14c620ecomPkG8xQqSZk0jGZAutl-GroG_duplicates_sql.jpg": {
+    "tag": "SQL Techniques For Removing Duplicates",
+    "filename": "drive_14c620ecomPkG8xQqSZk0jGZAutl-GroG_duplicates_sql.jpg"
+  },
+  "drive_1E-YaxorLa4RZOR6I8gMQyHZn-LB6wRe-_E2E_DE Lifecycle.jpg": {
+    "tag": "End To End Data Engineering",
+    "filename": "drive_1E-YaxorLa4RZOR6I8gMQyHZn-LB6wRe-_E2E_DE Lifecycle.jpg"
+  },
+  "drive_1gmxtLqJICWMeQeqG0AaWgfVH6qZToBCS_enterprise_orchestration_Arch.jpg": {
+    "tag": "Enterprise Multi Agent Architecture",
+    "filename": "drive_1gmxtLqJICWMeQeqG0AaWgfVH6qZToBCS_enterprise_orchestration_Arch.jpg"
+  },
+  "drive_1f659-I3R3LnOe9rMwu7-N5Hb3yH6F1rk_etl_elt.jpg": {
+    "tag": "ETL Versus ELT Infographic",
+    "filename": "drive_1f659-I3R3LnOe9rMwu7-N5Hb3yH6F1rk_etl_elt.jpg"
+  },
+  "drive_1leQPYQraLDYhrGjK3GLKSNmgE7J0R1as_ETL_workflow_DE.jpg": {
+    "tag": "Data Pipeline Process Comparison",
+    "filename": "drive_1leQPYQraLDYhrGjK3GLKSNmgE7J0R1as_ETL_workflow_DE.jpg"
+  },
+  "drive_1_33jsYjgsLFVGhbuRtYf7exZo-IhZw7C_excel_for_data_analytics_1.jpg": {
+    "tag": "Excel Data Analytics Cheat Sheet",
+    "filename": "drive_1_33jsYjgsLFVGhbuRtYf7exZo-IhZw7C_excel_for_data_analytics_1.jpg"
+  },
+  "drive_14HtUhqZZLLK6jNUAvTgtcEVtV85Fw622_excel_for_data_analytics_3.jpg": {
+    "tag": "Spreadsheet Formulas And Functions Cheat",
+    "filename": "drive_14HtUhqZZLLK6jNUAvTgtcEVtV85Fw622_excel_for_data_analytics_3.jpg"
+  },
+  "drive_18n0k2692oisDpguBr7sIsjClapLQrG9l_excel_for_data_analytics_5.jpg": {
+    "tag": "Data Cleaning And Preparation",
+    "filename": "drive_18n0k2692oisDpguBr7sIsjClapLQrG9l_excel_for_data_analytics_5.jpg"
+  },
+  "drive_1FQ4FSEG7rIRhTVVLnulvef8g97bPoJC__excel_for_data_analytics_6.jpg": {
+    "tag": "Handwritten Spreadsheet Tutorial Notes",
+    "filename": "drive_1FQ4FSEG7rIRhTVVLnulvef8g97bPoJC__excel_for_data_analytics_6.jpg"
+  },
+  "drive_1LvIOWqMq3hPKlTivMHVWsPVes8fRveHr_excel_for_data_analytics_7.jpg": {
+    "tag": "Handwritten Pivot Tables Study Notes",
+    "filename": "drive_1LvIOWqMq3hPKlTivMHVWsPVes8fRveHr_excel_for_data_analytics_7.jpg"
+  },
+  "drive_1YcRbqiNncvawaShYh3I5AWHwwVMWxyiG_excel_for_data_analytics_8.jpg": {
+    "tag": "Charts And Dashboards Notes",
+    "filename": "drive_1YcRbqiNncvawaShYh3I5AWHwwVMWxyiG_excel_for_data_analytics_8.jpg"
+  },
+  "drive_1OzfsYAo0ozSVpEPzzZZte_-2ZmeWQ9N4_tinitiate logo.png": {
+    "tag": "Yellow Arrow Company Logo",
+    "filename": "drive_1OzfsYAo0ozSVpEPzzZZte_-2ZmeWQ9N4_tinitiate logo.png"
   }
 }

@@ -130,6 +130,8 @@ API_KEY_STATE = {
     "config": {},
     "drive_folder_id": "",
     "drive_folder_name": "",
+    "drive_folders": [],
+    "drive_output_folders": [],
     "drive_output_folder_id": "",
     "drive_output_folder_name": "outputs",
     "gemini_model": "gemini-3.5-flash-lite",
@@ -176,6 +178,120 @@ def extract_api_key_icons(file_bytes: bytes, filename: str) -> dict[str, str]:
     return icons
 
 
+def extract_drive_folder_configs(values: dict[str, str]) -> list[dict[str, str]]:
+    """Extract one or more Google Drive reference/output folders from the uploaded config."""
+    configs: list[dict[str, str]] = []
+
+    def add(folder_id: str = "", folder_name: str = "") -> None:
+        normalized = normalize_drive_folder_id(str(folder_id or ""))
+        name = str(folder_name or "").strip()
+        if not normalized and not name:
+            return
+        if any(c.get("id") == normalized and c.get("name") == name for c in configs):
+            return
+        configs.append({"id": normalized, "name": name})
+
+    # Preferred compact form: GOOGLE_DRIVE_FOLDER_IDS=id1,id2,...
+    for key in ("GOOGLE_DRIVE_FOLDER_IDS", "GDRIVE_FOLDER_IDS", "DRIVE_FOLDER_IDS"):
+        raw = find_config_value(values, (key,))
+        if raw:
+            for value in re.split(r"[,;\n]+", str(raw)):
+                add(folder_id=value.strip())
+
+    # Numbered forms: GOOGLE_DRIVE_FOLDER_ID, _2, _3 ...
+    id_items: list[tuple[int, str, str]] = []
+    name_items: dict[int, str] = {}
+    for key, value in values.items():
+        normalized_key = normalize_key_name(key)
+        id_match = re.match(r"^(?:GOOGLE|GDRIVE|DRIVE)_DRIVE?_?FOLDER_ID(?:_(\d+))?$", normalized_key)
+        if not id_match:
+            id_match = re.match(r"^(?:GOOGLE_DRIVE|GDRIVE|DRIVE)_FOLDER_ID(?:_(\d+))?$", normalized_key)
+        if id_match:
+            index = int(id_match.group(1) or "1")
+            id_items.append((index, str(value or ""), ""))
+            continue
+        name_match = re.match(r"^(?:GOOGLE_DRIVE|GDRIVE|DRIVE)_FOLDER_NAME(?:_(\d+))?$", normalized_key)
+        if name_match:
+            name_items[int(name_match.group(1) or "1")] = str(value or "").strip()
+
+    for index, folder_id, _ in sorted(id_items, key=lambda item: item[0]):
+        add(folder_id=folder_id, folder_name=name_items.get(index, ""))
+
+    # Backward-compatible single-folder aliases.
+    if not configs:
+        add(
+            folder_id=find_config_value(values, (
+                "GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "DRIVE_FOLDER_ID",
+                "GOOGLE_DRIVE_FOLDER_URL", "GDRIVE_FOLDER_URL", "DRIVE_FOLDER_URL",
+            )),
+            folder_name=find_config_value(values, (
+                "GOOGLE_DRIVE_FOLDER_NAME", "GDRIVE_FOLDER_NAME", "GOOGLE_DRIVE_NAME",
+                "GDRIVE_NAME", "DRIVE_FOLDER_NAME", "DRIVE_NAME",
+            )),
+        )
+
+    return configs
+
+
+def extract_drive_output_folder_configs(values: dict[str, str]) -> list[dict[str, str]]:
+    """Extract dedicated Google Drive output folders from the uploaded config.
+
+    Supported examples:
+      GDRIVE_OUTPUT_FOLDER_ID_1=...
+      GDRIVE_OUTPUT_FOLDER_ID_2=...
+      GOOGLE_DRIVE_OUTPUT_FOLDER_ID_1=...
+      GDRIVE_OUTPUT_FOLDER_IDS=id1,id2
+    Optional matching names are supported with *_NAME_1, *_NAME_2, etc.
+    """
+    configs: list[dict[str, str]] = []
+
+    def add(folder_id: str = "", folder_name: str = "") -> None:
+        normalized = normalize_drive_folder_id(str(folder_id or ""))
+        name = str(folder_name or "").strip()
+        if not normalized and not name:
+            return
+        if any(c.get("id") == normalized for c in configs):
+            return
+        configs.append({"id": normalized, "name": name})
+
+    # Compact form: GDRIVE_OUTPUT_FOLDER_IDS=id1,id2,...
+    for key in (
+        "GDRIVE_OUTPUT_FOLDER_IDS",
+        "GOOGLE_DRIVE_OUTPUT_FOLDER_IDS",
+        "DRIVE_OUTPUT_FOLDER_IDS",
+    ):
+        raw = find_config_value(values, (key,))
+        if raw:
+            for value in re.split(r"[,;\n]+", str(raw)):
+                add(folder_id=value.strip())
+
+    id_items: list[tuple[int, str]] = []
+    name_items: dict[int, str] = {}
+    for key, value in values.items():
+        normalized_key = normalize_key_name(key)
+
+        id_match = re.match(
+            r"^(?:GOOGLE_DRIVE|GDRIVE|DRIVE)_OUTPUT_FOLDER_ID(?:_(\d+))?$",
+            normalized_key,
+        )
+        if id_match:
+            index = int(id_match.group(1) or "1")
+            id_items.append((index, str(value or "")))
+            continue
+
+        name_match = re.match(
+            r"^(?:GOOGLE_DRIVE|GDRIVE|DRIVE)_OUTPUT_FOLDER_NAME(?:_(\d+))?$",
+            normalized_key,
+        )
+        if name_match:
+            name_items[int(name_match.group(1) or "1")] = str(value or "").strip()
+
+    for index, folder_id in sorted(id_items, key=lambda item: item[0]):
+        add(folder_id=folder_id, folder_name=name_items.get(index, ""))
+
+    return configs
+
+
 def persist_drive_configuration() -> None:
     """
     Persist only non-secret Google Drive configuration.
@@ -184,6 +300,9 @@ def persist_drive_configuration() -> None:
     the Drive reference/output folder configuration so a FastAPI restart
     does not make the configured Drive references disappear.
     """
+    folders = API_KEY_STATE.get("drive_folders", [])
+    if not isinstance(folders, list):
+        folders = []
     payload = {
         "drive_folder_id": normalize_drive_folder_id(
             API_KEY_STATE.get("drive_folder_id", "")
@@ -191,6 +310,8 @@ def persist_drive_configuration() -> None:
         "drive_folder_name": str(
             API_KEY_STATE.get("drive_folder_name", "")
         ).strip(),
+        "drive_folders": folders,
+        "drive_output_folders": API_KEY_STATE.get("drive_output_folders", []) if isinstance(API_KEY_STATE.get("drive_output_folders", []), list) else [],
         "drive_output_folder_id": str(
             API_KEY_STATE.get("drive_output_folder_id", "")
         ).strip(),
@@ -236,9 +357,33 @@ def load_persisted_drive_configuration() -> None:
             payload.get("drive_folder_name", "") or ""
         ).strip()
 
+        persisted_folders = payload.get("drive_folders", [])
+        if isinstance(persisted_folders, list):
+            API_KEY_STATE["drive_folders"] = [
+                {
+                    "id": normalize_drive_folder_id(str(item.get("id", "") or "")),
+                    "name": str(item.get("name", "") or "").strip(),
+                }
+                for item in persisted_folders
+                if isinstance(item, dict) and (item.get("id") or item.get("name"))
+            ]
+
+        persisted_output_folders = payload.get("drive_output_folders", [])
+        if isinstance(persisted_output_folders, list):
+            API_KEY_STATE["drive_output_folders"] = [
+                {
+                    "id": normalize_drive_folder_id(str(item.get("id", "") or "")),
+                    "name": str(item.get("name", "") or "").strip(),
+                }
+                for item in persisted_output_folders
+                if isinstance(item, dict) and (item.get("id") or item.get("name"))
+            ]
+
         if folder_id or folder_name:
             API_KEY_STATE["drive_folder_id"] = folder_id
             API_KEY_STATE["drive_folder_name"] = folder_name
+            if not API_KEY_STATE.get("drive_folders"):
+                API_KEY_STATE["drive_folders"] = [{"id": folder_id, "name": folder_name}]
 
         if "drive_output_folder_id" in payload:
             API_KEY_STATE["drive_output_folder_id"] = str(
@@ -1717,6 +1862,10 @@ async def upload_api_keys_file(
         "GOOGLE_DRIVE_FOLDER_URL", "GDRIVE_FOLDER_URL", "DRIVE_FOLDER_URL",
         "GOOGLE_DRIVE_FOLDER_NAME", "GDRIVE_FOLDER_NAME", "GOOGLE_DRIVE_NAME",
         "GDRIVE_NAME", "DRIVE_FOLDER_NAME", "DRIVE_NAME",
+        "GOOGLE_DRIVE_FOLDER_IDS", "GDRIVE_FOLDER_IDS", "DRIVE_FOLDER_IDS",
+        "GOOGLE_DRIVE_OUTPUT_FOLDER_ID", "GDRIVE_OUTPUT_FOLDER_ID", "DRIVE_OUTPUT_FOLDER_ID",
+        "GOOGLE_DRIVE_OUTPUT_FOLDER_IDS", "GDRIVE_OUTPUT_FOLDER_IDS", "DRIVE_OUTPUT_FOLDER_IDS",
+        "GOOGLE_DRIVE_OUTPUT_FOLDER_NAME", "GDRIVE_OUTPUT_FOLDER_NAME", "DRIVE_OUTPUT_FOLDER_NAME",
     }
     provider_counts: dict[str, int] = {}
     for key_name, value in values.items():
@@ -1751,33 +1900,15 @@ async def upload_api_keys_file(
             API_KEY_STATE["keys"][normalized]
         )
 
-    drive_folder_id = find_config_value(
-        values,
-        (
-            "GOOGLE_DRIVE_FOLDER_ID",
-            "GDRIVE_FOLDER_ID",
-            "DRIVE_FOLDER_ID",
-            "GOOGLE_DRIVE_FOLDER_URL",
-            "GDRIVE_FOLDER_URL",
-            "DRIVE_FOLDER_URL",
-        ),
-    )
-    drive_folder_id = normalize_drive_folder_id(drive_folder_id)
+    drive_folders = extract_drive_folder_configs(values)
+    drive_output_folders = extract_drive_output_folder_configs(values)
+    API_KEY_STATE["drive_folders"] = drive_folders
+    API_KEY_STATE["drive_output_folders"] = drive_output_folders
+    API_KEY_STATE["drive_folder_id"] = drive_folders[0]["id"] if drive_folders else ""
+    API_KEY_STATE["drive_folder_name"] = drive_folders[0]["name"] if drive_folders else ""
+    API_KEY_STATE["drive_output_folder_id"] = ""
+    API_KEY_STATE["drive_output_folder_name"] = "outputs"
 
-    drive_folder_name = find_config_value(
-        values,
-        (
-            "GOOGLE_DRIVE_FOLDER_NAME",
-            "GDRIVE_FOLDER_NAME",
-            "GOOGLE_DRIVE_NAME",
-            "GDRIVE_NAME",
-            "DRIVE_FOLDER_NAME",
-            "DRIVE_NAME",
-        ),
-    )
-
-    API_KEY_STATE["drive_folder_id"] = drive_folder_id
-    API_KEY_STATE["drive_folder_name"] = drive_folder_name
     API_KEY_STATE["gemini_model"] = (
         find_config_value(
             values,
@@ -1790,7 +1921,7 @@ async def upload_api_keys_file(
     persist_drive_configuration()
 
     # Google Drive is an OAuth service, not another API-key credential.
-    if drive_oauth_available() and (drive_folder_id or drive_folder_name):
+    if drive_oauth_available() and drive_folders:
         API_KEY_STATE["keys"][DRIVE_OAUTH_KEY_ID] = {
             "key_name": DRIVE_OAUTH_KEY_ID,
             "value": "",
@@ -1947,8 +2078,11 @@ def get_drive_file(
     inline image response.
     """
 
-    require_drive_configuration()
-
+    # A Drive file ID returned by /api/drive/inputs is already a backend-known
+    # reference. Previewing that file should depend on Drive authorization and
+    # the file's own access permissions, not on the mutable folder-config state.
+    # This prevents a valid preview request from returning 400 when the folder
+    # configuration has not been restored into application state yet.
     file_id = str(
         file_id or ""
     ).strip()
@@ -2102,28 +2236,34 @@ def get_input_files() -> list[dict]:
         and TOKEN_FILE.exists()
     ):
         try:
-            folder_id = normalize_drive_folder_id(
-                API_KEY_STATE.get("drive_folder_id", "")
-            )
-            folder_name = str(
-                API_KEY_STATE.get("drive_folder_name", "")
-            ).strip()
-
             service = get_drive_service()
+            configured_folders = API_KEY_STATE.get("drive_folders", [])
+            if not configured_folders:
+                configured_folders = [{
+                    "id": normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
+                    "name": str(API_KEY_STATE.get("drive_folder_name", "") or "").strip(),
+                }]
 
-            resolved_folder_id = resolve_drive_folder_id(
-                service,
-                folder_id,
-                folder_name,
-            )
+            all_drive_files: list[dict] = []
+            resolved_folders: list[dict[str, str]] = []
+            for folder in configured_folders:
+                folder_id = normalize_drive_folder_id(str(folder.get("id", "") or ""))
+                folder_name = str(folder.get("name", "") or "").strip()
+                if not folder_id and not folder_name:
+                    continue
+                resolved_folder_id = resolve_drive_folder_id(service, folder_id, folder_name)
+                resolved_folders.append({"id": resolved_folder_id, "name": folder_name})
+                for drive_file in get_drive_files(service, resolved_folder_id):
+                    drive_file["driveFolderId"] = resolved_folder_id
+                    drive_file["driveFolderName"] = folder_name
+                    all_drive_files.append(drive_file)
 
-            API_KEY_STATE["drive_folder_id"] = resolved_folder_id
+            drive_files = all_drive_files
+            API_KEY_STATE["drive_folders"] = resolved_folders
+            if resolved_folders:
+                API_KEY_STATE["drive_folder_id"] = resolved_folders[0]["id"]
+                API_KEY_STATE["drive_folder_name"] = resolved_folders[0]["name"]
             persist_drive_configuration()
-
-            drive_files = get_drive_files(
-                service,
-                resolved_folder_id,
-            )
 
         except Exception as exc:
             raise HTTPException(
@@ -2712,6 +2852,48 @@ def _resolve_generation_reference(source_type: str, source: str, filename: str, 
     if not path.exists() or not is_valid_image_file(path): raise HTTPException(status_code=400, detail="The selected reference is not a readable image.")
     return path, content_type or get_mime_type(path)
 
+def _build_multi_reference_sheet(reference_paths: list[tuple[int, Path, str]]) -> Path:
+    """Build one labeled contact sheet so image models can use numbered references.
+
+    The numbers on the sheet are the same numbers shown in the frontend. This
+    keeps the prompt language such as "use 1 for the layout and 3 for the logo"
+    deterministic across image providers, including providers that accept only
+    one input image.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import uuid
+
+    if len(reference_paths) == 1:
+        return reference_paths[0][1]
+
+    tile_width = 900
+    tile_height = 700
+    label_height = 64
+    columns = 2
+    rows = (len(reference_paths) + columns - 1) // columns
+    sheet = Image.new("RGB", (columns * tile_width, rows * (tile_height + label_height)), "white")
+    draw = ImageDraw.Draw(sheet)
+
+    for position, (index, path, filename) in enumerate(reference_paths):
+        try:
+            with Image.open(path) as source_image:
+                frame = source_image.convert("RGB")
+                frame.thumbnail((tile_width - 24, tile_height - 24))
+                x = (position % columns) * tile_width
+                y = (position // columns) * (tile_height + label_height)
+                image_x = x + (tile_width - frame.width) // 2
+                image_y = y + label_height + (tile_height - frame.height) // 2
+                sheet.paste(frame, (image_x, image_y))
+                draw.rectangle((x, y, x + tile_width, y + label_height), fill=(245, 245, 245))
+                draw.text((x + 18, y + 16), f"REFERENCE {index}: {filename}", fill=(20, 20, 20))
+        except Exception as exc:
+            raise RuntimeError(f"Unable to prepare reference image {index} ({filename}): {exc}") from exc
+
+    output = UPLOADS_DIR / f"multi_reference_{uuid.uuid4().hex}.png"
+    sheet.save(output, format="PNG")
+    return output
+
+
 def _generation_instruction(prompt: str, template_json: str) -> str:
     return f"""Edit the supplied reference image into the requested final poster. Preserve the reference composition, layout, colors, decorative elements, logo placement, people/objects, and overall visual style. Do not redesign it from scratch. Replace only the content requested by the user. Keep text in the same regions and hierarchy, with correct spelling and readable typography. Do not invent contact details or extra content.\n\nUSER CONTENT REQUEST:\n{prompt}\n\nTEMPLATE CONTEXT:\n{template_json.strip()[:12000]}"""
 
@@ -2765,6 +2947,7 @@ async def generate_output_image(
     content_type: str = Form(""),
     prompt: str = Form(...),
     template_json: str = Form("{}"),
+    references_json: str = Form(""),
 ):
     if not prompt.strip():
         raise HTTPException(
@@ -2785,10 +2968,50 @@ async def generate_output_image(
             ),
         )
 
-    reference_path, _ = _resolve_generation_reference(
-        source_type, source, filename, content_type
+    # Resolve every selected reference. Google Drive IDs are downloaded by the
+    # backend, so the browser never needs to send image bytes or Drive URLs.
+    reference_entries: list[tuple[int, Path, str]] = []
+    if references_json.strip():
+        try:
+            raw_references = json.loads(references_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid references_json payload.") from exc
+
+        if not isinstance(raw_references, list) or not raw_references:
+            raise HTTPException(status_code=400, detail="At least one reference image is required.")
+
+        for position, item in enumerate(raw_references, start=1):
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail="Invalid reference entry.")
+            item_number = int(item.get("number") or position)
+            item_source_type = str(item.get("source_type") or "").strip().lower()
+            item_source = str(item.get("source") or "").strip()
+            item_filename = str(item.get("filename") or f"reference_{item_number}.png")
+            item_content_type = str(item.get("content_type") or "")
+            if not item_source:
+                raise HTTPException(status_code=400, detail=f"Reference {item_number} has no source.")
+            path, _ = _resolve_generation_reference(
+                item_source_type, item_source, item_filename, item_content_type
+            )
+            reference_entries.append((item_number, path, item_filename))
+    else:
+        reference_path, _ = _resolve_generation_reference(
+            source_type, source, filename, content_type
+        )
+        reference_entries = [(1, reference_path, filename)]
+
+    reference_path = _build_multi_reference_sheet(reference_entries)
+    reference_map = "; ".join(
+        f"{number} = {name}" for number, _, name in reference_entries
     )
-    instruction = _generation_instruction(prompt, template_json)
+    numbered_instruction = (
+        f"The supplied reference image is a numbered reference sheet. The available references are: {reference_map}. "
+        "When the user's prompt mentions a number such as 1, 2, or 3, use the corresponding numbered reference "
+        "from the sheet. Do not substitute a different reference. If multiple numbers are mentioned, use all of "
+        "those references together as instructed.\n\n"
+        + _generation_instruction(prompt, template_json)
+    )
+    instruction = numbered_instruction
 
     errors: list[str] = []
     key_id = ""
@@ -2861,8 +3084,55 @@ def get_generated_image(filename: str):
     return FileResponse(path,media_type="image/png",filename=path.name)
 
 
+@app.get("/api/drive/folders")
+def get_configured_drive_folders():
+    """Return the dedicated output folders supplied by the uploaded API/config file."""
+    folders = API_KEY_STATE.get("drive_output_folders", [])
+    if not isinstance(folders, list) or not folders:
+        load_persisted_drive_configuration()
+        folders = API_KEY_STATE.get("drive_output_folders", [])
+
+    result = []
+    try:
+        service = get_drive_service()
+        for index, folder in enumerate(folders, start=1):
+            if not isinstance(folder, dict):
+                continue
+            folder_id = normalize_drive_folder_id(str(folder.get("id", "") or ""))
+            folder_name = str(folder.get("name", "") or "").strip()
+            if not folder_id and not folder_name:
+                continue
+            try:
+                resolved_id = resolve_drive_folder_id(service, folder_id, folder_name)
+                metadata = service.files().get(
+                    fileId=resolved_id,
+                    fields="id,name,mimeType,trashed",
+                ).execute()
+                if metadata.get("mimeType") != "application/vnd.google-apps.folder" or metadata.get("trashed"):
+                    raise RuntimeError("Configured ID is not an active Google Drive folder.")
+                folder_id = str(metadata.get("id", resolved_id))
+                folder_name = str(metadata.get("name", folder_name or f"Google Drive {index}"))
+            except Exception as exc:
+                # Keep the configured ID visible even if metadata lookup fails;
+                # the save endpoint will provide the actionable Drive error.
+                print(f"Unable to resolve configured output folder {folder_id or folder_name}: {exc}")
+                folder_name = folder_name or f"Google Drive Output {index}"
+            result.append({
+                "id": folder_id,
+                "name": folder_name,
+                "label": folder_name or f"Google Drive Output {index}",
+            })
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to load configured Google Drive output folders: {exc}",
+        ) from exc
+
+    return {"folders": result}
+
+
 @app.post("/api/images/save-to-drive")
-def save_generated_image_to_drive(filename: str = Form(...)):
+def save_generated_image_to_drive(filename: str = Form(...), folder_id: str = Form("")):
     """Save a generated local image into the `outputs` folder under the Drive reference folder."""
     require_drive_configuration()
     safe_name = Path(filename).name
@@ -2875,11 +3145,24 @@ def save_generated_image_to_drive(filename: str = Form(...)):
 
     try:
         service = get_drive_service()
-        parent_folder_id = resolve_drive_folder_id(
-            service,
-            normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
-            str(API_KEY_STATE.get("drive_folder_name", "") or ""),
-        )
+        requested_folder_id = normalize_drive_folder_id(folder_id)
+        configured_outputs = API_KEY_STATE.get("drive_output_folders", []) or []
+        allowed_ids = {
+            normalize_drive_folder_id(str(item.get("id", "") or ""))
+            for item in configured_outputs
+            if isinstance(item, dict) and item.get("id")
+        }
+        if not requested_folder_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Select one of the configured Google Drive output folders before saving.",
+            )
+        if requested_folder_id not in allowed_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="The selected Google Drive output folder was not provided in the uploaded API key file.",
+            )
+        parent_folder_id = requested_folder_id
         outputs_folder_id = ensure_drive_outputs_folder(service, parent_folder_id)
         API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
         API_KEY_STATE["drive_output_folder_name"] = "outputs"
@@ -2920,8 +3203,9 @@ def save_generated_image_to_drive(filename: str = Form(...)):
             "filename": safe_name,
             "drive_file_id": drive_file.get("id", ""),
             "drive_folder": "outputs",
+            "parent_folder_id": parent_folder_id,
             "drive_url": drive_file.get("webViewLink", ""),
-            "message": "Generated image saved to Google Drive/outputs.",
+            "message": "Generated image saved to the selected Google Drive/outputs folder.",
         }
     except HTTPException:
         raise
