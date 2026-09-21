@@ -6,6 +6,8 @@ import os
 import re
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from app.services.canva_mcp_service import canva_mcp_service
+from app.services.canva_connect_service import canva_connect_service
 
 from fastapi import (
     FastAPI,
@@ -24,6 +26,7 @@ from pydantic import BaseModel
 from fastapi.responses import (
     FileResponse,
     StreamingResponse,
+    HTMLResponse,
 )
 
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -136,6 +139,8 @@ API_KEY_STATE = {
     "drive_output_folder_name": "outputs",
     "gemini_model": "gemini-3.5-flash-lite",
 }
+
+CANVA_AI_TRANSACTIONS: dict[str, dict] = {}
 
 
 def extract_api_key_icons(file_bytes: bytes, filename: str) -> dict[str, str]:
@@ -1034,32 +1039,6 @@ def _generic_prompt(item: dict, reference_path: Path) -> str:
     return _generic_chat_with_image(item,reference_path,"""Analyze the supplied reference design and create a concise production-ready content prompt for replacing its text while preserving the reference layout. Describe subject/content, important text regions, hierarchy and visual intent. Do not redesign it or invent factual details. Return only the prompt text.""")
 
 
-def _generic_image(item: dict, path: Path, instruction: str) -> bytes:
-    base_url=_provider_base_url(item); model=_provider_image_model(item)
-    if not base_url or not model: raise _generic_compatible_error(item)
-    import mimetypes
-    boundary="----ImageGeneratorBoundary"; mime=mimetypes.guess_type(path.name)[0] or "image/png"; body=bytearray()
-    def field(name,value): body.extend((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").encode())
-    field("model",model); field("prompt",instruction)
-    body.extend((f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"reference.png\"\r\nContent-Type: {mime}\r\n\r\n").encode()); body.extend(path.read_bytes()); body.extend(f"\r\n--{boundary}--\r\n".encode())
-    request=Request(f"{base_url.rstrip('/')}/images/edits",data=bytes(body),method="POST",headers={"Authorization":f"Bearer {str(item.get('value','')).strip()}","Content-Type":f"multipart/form-data; boundary={boundary}"})
-    try:
-        with urlopen(request,timeout=240) as response: payload=json.loads(response.read().decode())
-    except Exception as exc:
-        detail=str(exc)
-        if hasattr(exc,"read"):
-            try: detail=exc.read().decode("utf-8",errors="replace")
-            except Exception: pass
-        raise RuntimeError(f"{item.get('display_name','API')} image generation failed: {detail}") from exc
-    data=payload.get("data") or []
-    if not data: raise RuntimeError(f"{item.get('display_name','API')} returned no image output.")
-    first=data[0]
-    if first.get("b64_json"): return base64.b64decode(first["b64_json"])
-    if first.get("url"):
-        with urlopen(first["url"],timeout=120) as response: return response.read()
-    raise RuntimeError(f"{item.get('display_name','API')} returned no image data.")
-
-
 def _pipeline_metadata(pipeline_item: dict, operation: str) -> dict:
     """Return the exact selected provider identity and model for an AI operation."""
     service = str(pipeline_item.get("service") or "").strip().lower()
@@ -1099,38 +1078,6 @@ def _pipeline_template(pipeline_item: dict, **kwargs):
     return _generic_template(pipeline_item,Path(path))
 
 
-def _pipeline_image(pipeline_item: dict, reference_path: Path, instruction: str) -> tuple[bytes,str]:
-    """Generate an image using one concrete image-capable credential."""
-    service = str(pipeline_item.get("service") or "").strip().lower()
-    key = str(pipeline_item.get("value", "")).strip()
-
-    if not _pipeline_key_is_usable(pipeline_item, "image"):
-        raise RuntimeError(
-            f"{pipeline_item.get('display_name', 'Selected API')} does not provide "
-            "image-generation capability."
-        )
-
-    if service == "gemini":
-        return (
-            _gemini_image(key, reference_path, instruction),
-            _provider_image_model(pipeline_item),
-        )
-
-    if service == "openrouter":
-        model = _provider_image_model(pipeline_item)
-        return (
-            _openrouter_image(key, reference_path, instruction, model),
-            model,
-        )
-
-    if service == "openai":
-        model = _provider_image_model(pipeline_item)
-        return _generic_image(pipeline_item, reference_path, instruction), model
-
-    model = _provider_image_model(pipeline_item)
-    return _generic_image(pipeline_item, reference_path, instruction), model
-
-
 def _selected_stage_candidates(stage: str) -> list[tuple[str, dict]]:
     """Return selected credentials capable of one specific pipeline stage."""
     candidates: list[tuple[str, dict]] = []
@@ -1145,20 +1092,6 @@ def _exception_is_quota_error(exc: Exception) -> bool:
     return any(token in text for token in (
         "429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT", "RATE_LIMIT",
     ))
-
-
-def _openrouter_image(api_key: str, path: Path, instruction: str, model: str | None = None) -> bytes:
-    selected_model = str(model or OPENROUTER_IMAGE_MODEL).strip()
-    if not selected_model:
-        raise RuntimeError("No OpenRouter image model is configured for the selected API key.")
-    payload={"model":selected_model,"prompt":instruction,"input_references":[{"type":"image_url","image_url":{"url":_image_data_url(path)}}],"output_format":"png"}
-    result=_openrouter_request(api_key,"images",payload,timeout=240); data=result.get("data") or []
-    if not data: raise RuntimeError("OpenRouter returned no image output.")
-    first=data[0]
-    if first.get("b64_json"): return base64.b64decode(first["b64_json"])
-    if first.get("url"):
-        with urlopen(first["url"],timeout=120) as response: return response.read()
-    raise RuntimeError("OpenRouter returned no image data.")
 
 
 def _normalize_ai_tag(raw: str) -> str:
@@ -1643,16 +1576,6 @@ load_persisted_drive_configuration()
 # CORS
 # -------------------------------------------------------------------
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # -------------------------------------------------------------------
@@ -2354,6 +2277,819 @@ def health():
 
 
 # -------------------------------------------------------------------
+# Canva MCP OAuth / connection endpoints
+# -------------------------------------------------------------------
+
+@app.get("/api/canva/oauth/start")
+async def canva_oauth_start():
+    """Initialize the Canva MCP OAuth provider.
+
+    The actual browser authorization is completed by the MCP OAuth
+    flow. This endpoint intentionally does not expose OAuth tokens.
+    """
+
+    try:
+        service = canva_mcp_service
+
+        if service.oauth_provider is None:
+            service.create_oauth_provider()
+
+        return {
+            "success": True,
+            "message": (
+                "Canva OAuth service is initialized. "
+                "The MCP connection will start the authorization flow "
+                "when authentication is required."
+            ),
+            "server": service.server_url,
+            "redirect_uri": (
+                "http://127.0.0.1:8000/api/canva/oauth/callback"
+            ),
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Canva OAuth initialization failed: {exc}",
+        ) from exc
+
+
+@app.get("/api/canva/oauth/status")
+async def canva_oauth_status():
+    """Return the current Canva MCP OAuth state."""
+
+    try:
+        return await canva_mcp_service.get_connection_status()
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to read Canva OAuth status: {exc}",
+        ) from exc
+
+
+@app.get("/api/canva/oauth/callback")
+async def canva_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    iss: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """
+    Receive the OAuth redirect from Canva and pass it to the MCP OAuth
+    provider. The authorization code is never returned to the frontend.
+    """
+
+    try:
+        result = await canva_mcp_service.complete_oauth_callback(
+            code=code,
+            state=state,
+            iss=iss,
+            error=error,
+            error_description=error_description,
+        )
+
+        if not result.get("success"):
+            message = str(
+                result.get("message")
+                or result.get("error_description")
+                or result.get("error")
+                or "Canva authorization failed."
+            )
+            return HTMLResponse(
+                content=(
+                    "<!doctype html>"
+                    "<html><head><title>Canva Authorization</title></head>"
+                    "<body style=\"font-family:Arial,sans-serif;padding:40px;\">"
+                    "<h2>Canva authorization failed</h2>"
+                    f"<p>{message}</p>"
+                    "<p>You can close this window and return to the Image Generator.</p>"
+                    "</body></html>"
+                ),
+                status_code=400,
+            )
+
+        return HTMLResponse(
+            content=(
+                "<!doctype html>"
+                "<html><head><title>Canva Authorization</title></head>"
+                "<body style=\"font-family:Arial,sans-serif;padding:40px;\">"
+                "<h2>Canva authorization received</h2>"
+                "<p>The Image Generator received the Canva authorization response.</p>"
+                "<p>You can close this window and return to the Image Generator.</p>"
+                "</body></html>"
+            ),
+            status_code=200,
+        )
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("CANVA OAUTH CALLBACK ERROR")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Canva OAuth callback failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+
+@app.get("/api/canva/connect/oauth/status")
+async def canva_connect_oauth_status():
+    try:
+        return await canva_connect_service.status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/canva/connect/oauth/start")
+async def canva_connect_oauth_start():
+    try:
+        return {
+            "success": True,
+            "authorization_url": canva_connect_service.authorization_url(),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/canva/connect/oauth/callback")
+async def canva_connect_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if error:
+        message = error_description or error or "Canva authorization failed."
+        return HTMLResponse(
+            content=(
+                "<!doctype html><html><body style='font-family:Arial;padding:40px'>"
+                "<h2>Canva authorization failed</h2>"
+                f"<p>{message}</p><p>Close this window and return to Image Generator.</p>"
+                "</body></html>"
+            ),
+            status_code=400,
+        )
+
+    if not code:
+        return HTMLResponse(
+            content=(
+                "<!doctype html><html><body style='font-family:Arial;padding:40px'>"
+                "<h2>Canva authorization failed</h2>"
+                "<p>No authorization code was returned.</p>"
+                "</body></html>"
+            ),
+            status_code=400,
+        )
+
+    try:
+        await canva_connect_service.exchange_code(code, state)
+        return HTMLResponse(
+            content=(
+                "<!doctype html><html><body style='font-family:Arial;padding:40px'>"
+                "<h2>Canva connected successfully</h2>"
+                "<p>You can close this window and return to the Image Generator.</p>"
+                "</body></html>"
+            ),
+            status_code=200,
+        )
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(
+            content=(
+                "<!doctype html><html><body style='font-family:Arial;padding:40px'>"
+                "<h2>Canva authorization failed</h2>"
+                f"<p>{str(exc)}</p>"
+                "<p>Close this window and try Connect Canva again.</p>"
+                "</body></html>"
+            ),
+            status_code=500,
+        )
+
+
+@app.post("/api/canva/create-from-generated-image")
+async def canva_create_from_generated_image(
+    filename: str = Form(...),
+    design_type: str = Form("poster"),
+):
+    """Create an editable Canva design from a local generated image.
+
+    This uses Canva Connect's direct binary asset upload. The local image is
+    never exposed through a public URL and no Cloudflare/ngrok tunnel is used.
+    """
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Generated image filename is required.")
+
+    local_path = IMAGE_OUTPUT_DIR / safe_name
+    if not local_path.exists() or not local_path.is_file():
+        raise HTTPException(status_code=404, detail="Generated image was not found on the server.")
+
+    try:
+        return await canva_connect_service.create_editable_design_from_local_image(local_path)
+    except Exception as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if "not authorized" in lowered or "not authenticated" in lowered or "connect canva" in lowered:
+            try:
+                authorization_url = canva_connect_service.authorization_url()
+            except Exception:
+                authorization_url = ""
+            raise HTTPException(
+                status_code=401,
+                detail=message,
+                headers={"X-Canva-Authorization-URL": authorization_url},
+            ) from exc
+        raise HTTPException(status_code=502, detail=f"Unable to create the editable Canva design: {message}") from exc
+
+
+def _canva_ai_text_completion(pipeline_item: dict, instruction: str) -> str:
+    """Use the selected text-capable API to turn an edit command into MCP operations."""
+    service = str(pipeline_item.get("service") or "").strip().lower()
+    if service == "claude":
+        result = _claude_request(
+            str(pipeline_item.get("value", "")).strip(),
+            {
+                "model": _provider_text_model(pipeline_item),
+                "max_tokens": 4096,
+                "messages": [{"role": "user", "content": instruction}],
+            },
+        )
+        content = result.get("content") or []
+        return "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        ).strip()
+
+    if service == "openrouter":
+        result = _openrouter_request(
+            str(pipeline_item.get("value", "")).strip(),
+            "chat/completions",
+            {
+                "model": _provider_text_model(pipeline_item),
+                "messages": [{"role": "user", "content": instruction}],
+                "temperature": 0.1,
+            },
+        )
+        return _chat_response_text(result, "OpenRouter")
+
+    result = _generic_request(
+        pipeline_item,
+        "chat/completions",
+        {
+            "model": _provider_text_model(pipeline_item),
+            "messages": [{"role": "user", "content": instruction}],
+            "temperature": 0.1,
+        },
+    )
+    return _chat_response_text(result, str(pipeline_item.get("display_name") or "Selected API"))
+
+
+@app.post("/api/canva/ai-edit/prepare")
+async def canva_ai_edit_prepare(
+    design_id: str = Form(...),
+    command: str = Form(...),
+):
+    """Translate a natural-language edit command into Canva MCP operations.
+
+    The operation is intentionally prepared in a draft editing transaction.
+    The frontend must explicitly click Save AI Changes before commit.
+    """
+    design_id = str(design_id or "").strip()
+    command = str(command or "").strip()
+    if not design_id or not command:
+        raise HTTPException(status_code=400, detail="design_id and command are required.")
+
+    transaction_id = ""
+    try:
+        start_result = await canva_mcp_service.call_tool(
+            "start-editing-transaction",
+            {"design_id": design_id},
+        )
+        start_payload = canva_mcp_service._extract_payload(start_result)
+        transaction_id = str(
+            canva_mcp_service._find_value(
+                start_payload,
+                {"transaction_id", "transactionId"},
+            )
+            or ""
+        )
+        if not transaction_id:
+            raise RuntimeError("Canva MCP did not return an editing transaction ID.")
+
+        _, pipeline_item = _require_pipeline_key("text")
+        instruction = f"""
+You are generating structured operations for Canva MCP editing.
+The user command is:
+{command}
+
+The Canva start-editing-transaction response below contains the editable design
+content, text regions, media/fills and page information:
+{json.dumps(start_payload, ensure_ascii=False, default=str)[:60000]}
+
+Return ONLY valid JSON with this exact top-level shape:
+{{"operations":[...]}}
+
+Use only these Canva MCP operation types when applicable:
+- replace_text
+- find_and_replace_text
+- update_title
+- update_fill
+- insert_fill
+- delete_element
+- position_element
+- resize_element
+- format_text
+
+Use the exact element/page identifiers and existing text from the design response.
+Do not invent IDs. Do not delete pages. Do not return markdown or explanations.
+If the command cannot be safely mapped to an operation using the supplied design
+content, return {{"operations":[]}}.
+"""
+        raw = _canva_ai_text_completion(pipeline_item, instruction)
+        parsed = _extract_json_object(raw)
+        operations = parsed.get("operations")
+        if not isinstance(operations, list) or not operations:
+            raise RuntimeError("The selected AI API could not map that command to a safe Canva edit.")
+        if not all(isinstance(item, dict) for item in operations):
+            raise RuntimeError("The AI edit operations response was invalid.")
+
+        perform_result = await canva_mcp_service.call_tool(
+            "perform-editing-operations",
+            {
+                "transaction_id": transaction_id,
+                "operations": operations,
+            },
+        )
+        perform_payload = canva_mcp_service._extract_payload(perform_result)
+        CANVA_AI_TRANSACTIONS[transaction_id] = {
+            "design_id": design_id,
+            "operations": operations,
+        }
+
+        preview_url = canva_mcp_service._find_value(
+            perform_payload,
+            {"thumbnail_url", "thumbnail", "preview_url", "url"},
+        )
+        return {
+            "success": True,
+            "design_id": design_id,
+            "transaction_id": transaction_id,
+            "operations": operations,
+            "preview_url": str(preview_url or ""),
+            "message": "AI edits are prepared in Canva draft mode. Review them, then click Save AI Changes.",
+        }
+    except Exception as exc:
+        if transaction_id:
+            try:
+                await canva_mcp_service.call_tool(
+                    "cancel-editing-transaction",
+                    {"transaction_id": transaction_id},
+                )
+            except Exception:
+                pass
+        raise HTTPException(status_code=502, detail=f"Canva AI editing failed: {exc}") from exc
+
+
+@app.post("/api/canva/ai-edit/commit")
+async def canva_ai_edit_commit(transaction_id: str = Form(...)):
+    transaction_id = str(transaction_id or "").strip()
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="transaction_id is required.")
+    if transaction_id not in CANVA_AI_TRANSACTIONS:
+        raise HTTPException(status_code=404, detail="The Canva AI editing transaction is no longer available. Prepare the edit again.")
+
+    try:
+        result = await canva_mcp_service.call_tool(
+            "commit-editing-transaction",
+            {"transaction_id": transaction_id},
+        )
+        info = CANVA_AI_TRANSACTIONS.pop(transaction_id)
+        return {
+            "success": True,
+            "design_id": info["design_id"],
+            "result": canva_mcp_service._extract_payload(result),
+            "message": "AI changes were saved to the Canva design.",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to save Canva AI changes: {exc}") from exc
+
+
+@app.post("/api/canva/ai-edit/cancel")
+async def canva_ai_edit_cancel(transaction_id: str = Form(...)):
+    transaction_id = str(transaction_id or "").strip()
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="transaction_id is required.")
+    if transaction_id not in CANVA_AI_TRANSACTIONS:
+        return {"success": True, "message": "No active Canva AI editing transaction."}
+    try:
+        await canva_mcp_service.call_tool(
+            "cancel-editing-transaction",
+            {"transaction_id": transaction_id},
+        )
+    finally:
+        CANVA_AI_TRANSACTIONS.pop(transaction_id, None)
+    return {"success": True, "message": "AI draft changes were cancelled."}
+
+
+@app.post("/api/canva/export-to-drive")
+async def canva_export_to_drive(
+    design_id: str = Form(...),
+    folder_id: str = Form(...),
+    filename: str = Form("enhanced-image.png"),
+):
+    """
+    Export the latest saved Canva design and save it directly to the
+    selected Google Drive/outputs folder.
+
+    IMPORTANT:
+    - The Canva export is kept in memory as bytes.
+    - No final Canva export is written/downloaded to the local filesystem.
+    """
+
+    design_id = str(design_id or "").strip()
+    requested_folder_id = normalize_drive_folder_id(folder_id)
+
+    original_name = (
+        Path(str(filename or "enhanced-image.png")).stem
+        or "enhanced-image"
+    )
+
+    safe_name = f"{original_name}_enhanced.png"
+
+    if not design_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Canva design ID is required.",
+        )
+
+    if not requested_folder_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Select a Google Drive output folder before saving.",
+        )
+
+    configured_outputs = API_KEY_STATE.get(
+        "drive_output_folders",
+        [],
+    ) or []
+
+    allowed_ids = {
+        normalize_drive_folder_id(
+            str(item.get("id", "") or "")
+        )
+        for item in configured_outputs
+        if isinstance(item, dict) and item.get("id")
+    }
+
+    if requested_folder_id not in allowed_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The selected Google Drive output folder was not "
+                "provided in the uploaded API key file."
+            ),
+        )
+
+    # ------------------------------------------------------------
+    # STEP 1: Export Canva design
+    # ------------------------------------------------------------
+    try:
+        print()
+        print("=" * 80)
+        print("CANVA → GOOGLE DRIVE")
+        print("=" * 80)
+        print(f"Design ID      : {design_id}")
+        print(f"Drive folder   : {requested_folder_id}")
+        print(f"Output filename: {safe_name}")
+        print()
+        print("STEP 1: Exporting Canva design as PNG...")
+        print()
+
+        image_bytes = await canva_connect_service.export_design_png(
+            design_id
+        )
+
+        if not image_bytes:
+            raise RuntimeError(
+                "Canva returned an empty PNG export."
+            )
+
+        print(
+            f"STEP 1 SUCCESS: Canva export received "
+            f"({len(image_bytes):,} bytes)."
+        )
+        print()
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("CANVA EXPORT FAILED")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Canva export failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    # ------------------------------------------------------------
+    # STEP 2: Connect to Google Drive
+    # ------------------------------------------------------------
+    try:
+        print("STEP 2: Connecting to Google Drive...")
+
+        service = get_drive_service()
+
+        print("STEP 2 SUCCESS: Google Drive service connected.")
+        print()
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("GOOGLE DRIVE CONNECTION FAILED")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Google Drive connection failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    # ------------------------------------------------------------
+    # STEP 3: Find/create outputs folder
+    # ------------------------------------------------------------
+    try:
+        print("STEP 3: Resolving outputs folder...")
+
+        outputs_folder_id = ensure_drive_outputs_folder(
+            service,
+            requested_folder_id,
+        )
+
+        if not outputs_folder_id:
+            raise RuntimeError(
+                "The outputs folder ID could not be resolved."
+            )
+
+        print(
+            f"STEP 3 SUCCESS: outputs folder = "
+            f"{outputs_folder_id}"
+        )
+        print()
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("OUTPUTS FOLDER RESOLUTION FAILED")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Unable to resolve the Google Drive outputs folder: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    # ------------------------------------------------------------
+    # STEP 4: Check whether the file already exists
+    # ------------------------------------------------------------
+    try:
+        print("STEP 4: Checking for an existing output file...")
+
+        escaped_name = safe_name.replace(
+            chr(39),
+            chr(92) + chr(39),
+        )
+
+        existing = (
+            service.files()
+            .list(
+                q=(
+                    f"'{outputs_folder_id}' in parents "
+                    f"and name = '{escaped_name}' "
+                    "and trashed = false"
+                ),
+                pageSize=10,
+                fields="files(id,name,webViewLink)",
+            )
+            .execute()
+            .get("files", [])
+        )
+
+        print(
+            f"STEP 4 SUCCESS: "
+            f"{len(existing)} existing file(s) found."
+        )
+        print()
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("GOOGLE DRIVE FILE LOOKUP FAILED")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Google Drive file lookup failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    # ------------------------------------------------------------
+    # STEP 5: Upload Canva export directly from memory
+    # ------------------------------------------------------------
+    try:
+        print(
+            "STEP 5: Uploading Canva export directly "
+            "from memory to Google Drive..."
+        )
+
+        media = MediaIoBaseUpload(
+            io.BytesIO(image_bytes),
+            mimetype="image/png",
+            resumable=False,
+        )
+
+        if existing:
+            drive_file = (
+                service.files()
+                .update(
+                    fileId=existing[0]["id"],
+                    media_body=media,
+                    fields="id,name,webViewLink",
+                )
+                .execute()
+            )
+
+            operation = "updated"
+
+        else:
+            drive_file = (
+                service.files()
+                .create(
+                    body={
+                        "name": safe_name,
+                        "parents": [outputs_folder_id],
+                    },
+                    media_body=media,
+                    fields="id,name,webViewLink",
+                )
+                .execute()
+            )
+
+            operation = "created"
+
+        print(
+            f"STEP 5 SUCCESS: Google Drive file {operation}."
+        )
+        print(
+            f"Drive file ID: "
+            f"{drive_file.get('id', '')}"
+        )
+        print()
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("GOOGLE DRIVE UPLOAD FAILED")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Google Drive upload failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    # ------------------------------------------------------------
+    # SUCCESS
+    # ------------------------------------------------------------
+    print("=" * 80)
+    print("CANVA → GOOGLE DRIVE SUCCESS")
+    print("=" * 80)
+    print(
+        "The Canva design was exported and uploaded "
+        "directly to Google Drive."
+    )
+    print("=" * 80)
+    print()
+
+    return {
+        "success": True,
+        "filename": safe_name,
+        "drive_file_id": drive_file.get("id", ""),
+        "drive_folder": "outputs",
+        "parent_folder_id": requested_folder_id,
+        "drive_url": drive_file.get("webViewLink", ""),
+        "message": (
+            "The latest saved Canva design was exported "
+            "and saved directly to the selected "
+            "Google Drive/outputs folder."
+        ),
+    }
+
+@app.get("/api/canva/tools")
+async def canva_list_tools():
+    """Connect to Canva MCP and list the tools available to the backend."""
+
+    try:
+        tools = await canva_mcp_service.list_tools()
+
+        return {
+            "success": True,
+            "count": len(tools),
+            "tools": tools,
+        }
+
+    except BaseException as exc:
+        import traceback
+
+        print()
+        print("=" * 80)
+        print("CANVA MCP ERROR")
+        print("=" * 80)
+        print()
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+        # Python 3.11+ TaskGroup errors are ExceptionGroups. Print every
+        # nested exception so the real MCP/OAuth/network error is visible
+        # instead of only reporting "unhandled errors in a TaskGroup".
+        if isinstance(exc, BaseExceptionGroup):
+            print()
+            print("=" * 80)
+            print("NESTED TASKGROUP EXCEPTIONS")
+            print("=" * 80)
+
+            def _print_nested(group: BaseExceptionGroup, indent: int = 0) -> None:
+                prefix = " " * indent
+                for index, nested in enumerate(group.exceptions, start=1):
+                    print(
+                        f"{prefix}[{index}] "
+                        f"{type(nested).__name__}: {nested}"
+                    )
+                    if isinstance(nested, BaseExceptionGroup):
+                        _print_nested(nested, indent + 4)
+
+            _print_nested(exc)
+            print("=" * 80)
+
+        print("END CANVA MCP ERROR")
+        print("=" * 80)
+        print()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Canva MCP connection failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+
+# -------------------------------------------------------------------
 # Get input files
 # -------------------------------------------------------------------
 
@@ -2852,92 +3588,289 @@ def _resolve_generation_reference(source_type: str, source: str, filename: str, 
     if not path.exists() or not is_valid_image_file(path): raise HTTPException(status_code=400, detail="The selected reference is not a readable image.")
     return path, content_type or get_mime_type(path)
 
-def _build_multi_reference_sheet(reference_paths: list[tuple[int, Path, str]]) -> Path:
-    """Build one labeled contact sheet so image models can use numbered references.
 
-    The numbers on the sheet are the same numbers shown in the frontend. This
-    keeps the prompt language such as "use 1 for the layout and 3 for the logo"
-    deterministic across image providers, including providers that accept only
-    one input image.
+def _prepare_reference_paths(reference_entries: list[tuple[int, Path, str]]) -> list[Path]:
+    """Return the original reference files individually.
+
+    Multiple references must stay as separate visual inputs. Do not build a
+    contact sheet/collage because that changes the meaning of the references
+    and encourages image models to reproduce the references as panels.
     """
-    from PIL import Image, ImageDraw, ImageFont
-    import uuid
-
-    if len(reference_paths) == 1:
-        return reference_paths[0][1]
-
-    tile_width = 900
-    tile_height = 700
-    label_height = 64
-    columns = 2
-    rows = (len(reference_paths) + columns - 1) // columns
-    sheet = Image.new("RGB", (columns * tile_width, rows * (tile_height + label_height)), "white")
-    draw = ImageDraw.Draw(sheet)
-
-    for position, (index, path, filename) in enumerate(reference_paths):
-        try:
-            with Image.open(path) as source_image:
-                frame = source_image.convert("RGB")
-                frame.thumbnail((tile_width - 24, tile_height - 24))
-                x = (position % columns) * tile_width
-                y = (position // columns) * (tile_height + label_height)
-                image_x = x + (tile_width - frame.width) // 2
-                image_y = y + label_height + (tile_height - frame.height) // 2
-                sheet.paste(frame, (image_x, image_y))
-                draw.rectangle((x, y, x + tile_width, y + label_height), fill=(245, 245, 245))
-                draw.text((x + 18, y + 16), f"REFERENCE {index}: {filename}", fill=(20, 20, 20))
-        except Exception as exc:
-            raise RuntimeError(f"Unable to prepare reference image {index} ({filename}): {exc}") from exc
-
-    output = UPLOADS_DIR / f"multi_reference_{uuid.uuid4().hex}.png"
-    sheet.save(output, format="PNG")
-    return output
+    if not reference_entries:
+        raise RuntimeError("At least one reference image is required.")
+    return [entry[1] for entry in reference_entries]
 
 
-def _generation_instruction(prompt: str, template_json: str) -> str:
-    return f"""Edit the supplied reference image into the requested final poster. Preserve the reference composition, layout, colors, decorative elements, logo placement, people/objects, and overall visual style. Do not redesign it from scratch. Replace only the content requested by the user. Keep text in the same regions and hierarchy, with correct spelling and readable typography. Do not invent contact details or extra content.\n\nUSER CONTENT REQUEST:\n{prompt}\n\nTEMPLATE CONTEXT:\n{template_json.strip()[:12000]}"""
+def _generation_instruction(
+    prompt: str,
+    template_json: str,
+    reference_map: str = "",
+) -> str:
+    reference_context = (
+        f"REFERENCE MAP (the images are separate inputs): {reference_map}\n"
+        if reference_map
+        else ""
+    )
+    return f"""Create ONE coherent final image by synthesizing the supplied reference images.
 
-def _gemini_image(api_key: str, path: Path, instruction: str) -> bytes:
+The references are separate source images, NOT a collage, contact sheet, grid, or set of panels.
+Never reproduce the references side-by-side, as a grid, as thumbnails, or as multiple frames.
+Instead, naturally combine the useful visual characteristics from the references into one final
+composition. A reference may contribute a person, object, clothing, pose, product, logo, color
+palette, background, lighting, texture, visual style, composition, or another feature. Preserve
+identity and important visual details when the user asks for them, but merge the selected
+characteristics into a single believable result.
+
+If the user mentions reference numbers, use the corresponding separate reference image(s).
+If multiple references are selected, synthesize the requested features from all of them into ONE image.
+Do not omit a selected reference merely because another reference is also present.
+
+{reference_context}
+USER CONTENT REQUEST:
+{prompt}
+
+TEMPLATE CONTEXT:
+{template_json.strip()[:12000]}
+"""
+def _gemini_image(api_key: str, paths: list[Path], instruction: str, model: str | None = None) -> bytes:
     from google import genai
     from google.genai import types
+
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model="gemini-3.1-flash-image", contents=[types.Part.from_text(text=instruction), types.Part.from_bytes(data=path.read_bytes(), mime_type=get_mime_type(path))], config=types.GenerateContentConfig(response_modalities=["IMAGE"]))
+    contents = [types.Part.from_text(text=instruction)]
+
+    for path in paths:
+        contents.append(
+            types.Part.from_bytes(
+                data=path.read_bytes(),
+                mime_type=get_mime_type(path),
+            )
+        )
+
+    response = client.models.generate_content(
+        model=str(model or "gemini-3.1-flash-image").strip(),
+        contents=contents,
+        config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+    )
+
     for part in response.parts or []:
         inline_data = getattr(part, "inline_data", None)
         if inline_data is not None:
-            # google-genai can expose an SDK image wrapper whose save() method
-            # does not accept PIL's format= keyword. Prefer the raw image bytes
-            # supplied by Gemini.
             image_data = getattr(inline_data, "data", None)
             if image_data:
                 return bytes(image_data)
 
-            # Compatibility fallback for SDK versions that do not expose the
-            # inline bytes directly.
             image_obj = part.as_image()
             out = io.BytesIO()
             image_obj.convert("RGB").save(out, "PNG")
             return out.getvalue()
-    raise RuntimeError("The Gemini API returned no image. This key may not have access to the image-generation model.")
 
-def _openai_image(api_key: str, path: Path, instruction: str) -> bytes:
+    raise RuntimeError(
+        "The Gemini API returned no image. This key may not have access to the image-generation model."
+    )
+
+
+def _multipart_image_body(
+    paths: list[Path],
+    instruction: str,
+    model: str,
+) -> tuple[bytes, str]:
+    """Build an OpenAI-compatible multipart image edit request.
+
+    Repeated image[] fields allow providers that support multiple edit inputs
+    to receive every reference independently instead of receiving a collage.
+    """
     import mimetypes
-    boundary="----ImageGeneratorBoundary"
-    mime=mimetypes.guess_type(path.name)[0] or "image/png"
-    body=bytearray()
-    def field(name,value): return (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").encode()
-    body.extend(field("model","gpt-image-2")); body.extend(field("prompt",instruction))
-    body.extend((f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"reference.png\"\r\nContent-Type: {mime}\r\n\r\n").encode()); body.extend(path.read_bytes()); body.extend(f"\r\n--{boundary}--\r\n".encode())
-    req=Request("https://api.openai.com/v1/images/edits",data=bytes(body),method="POST",headers={"Authorization":f"Bearer {api_key}","Content-Type":f"multipart/form-data; boundary={boundary}"})
+
+    boundary = "----ImageGeneratorBoundary"
+    body = bytearray()
+
+    def field(name: str, value: str) -> None:
+        body.extend(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode()
+        )
+
+    field("model", model)
+    field("prompt", instruction)
+
+    for index, path in enumerate(paths, start=1):
+        mime = mimetypes.guess_type(path.name)[0] or "image/png"
+        body.extend(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="image[]"; '
+                f'filename="reference_{index}.png"\r\n'
+                f"Content-Type: {mime}\r\n\r\n"
+            ).encode()
+        )
+        body.extend(path.read_bytes())
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode())
+    return bytes(body), boundary
+
+
+def _openai_image(api_key: str, paths: list[Path], instruction: str, model: str | None = None) -> bytes:
+    body, boundary = _multipart_image_body(paths, instruction, str(model or "gpt-image-2").strip())
+    req = Request(
+        "https://api.openai.com/v1/images/edits",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
     try:
-        with urlopen(req,timeout=180) as response: payload=json.loads(response.read().decode())
-    except Exception as exc: raise RuntimeError(f"OpenAI image generation failed: {exc}") from exc
-    item=(payload.get("data") or [None])[0]
-    if not item: raise RuntimeError("OpenAI returned no image output.")
-    if item.get("b64_json"): return base64.b64decode(item["b64_json"])
+        with urlopen(req, timeout=180) as response:
+            payload = json.loads(response.read().decode())
+    except Exception as exc:
+        raise RuntimeError(f"OpenAI image generation failed: {exc}") from exc
+
+    item = (payload.get("data") or [None])[0]
+    if not item:
+        raise RuntimeError("OpenAI returned no image output.")
+    if item.get("b64_json"):
+        return base64.b64decode(item["b64_json"])
     if item.get("url"):
-        with urlopen(item["url"],timeout=60) as response: return response.read()
+        with urlopen(item["url"], timeout=60) as response:
+            return response.read()
     raise RuntimeError("OpenAI returned no image data.")
+
+
+def _generic_image(item: dict, paths: list[Path], instruction: str) -> bytes:
+    base_url = _provider_base_url(item)
+    model = _provider_image_model(item)
+    if not base_url or not model:
+        raise _generic_compatible_error(item)
+
+    body, boundary = _multipart_image_body(paths, instruction, model)
+    request = Request(
+        f"{base_url.rstrip('/')}/images/edits",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {str(item.get('value', '')).strip()}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    try:
+        with urlopen(request, timeout=240) as response:
+            payload = json.loads(response.read().decode())
+    except Exception as exc:
+        detail = str(exc)
+        if hasattr(exc, "read"):
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"{item.get('display_name', 'API')} image generation failed: {detail}"
+        ) from exc
+
+    data = payload.get("data") or []
+    if not data:
+        raise RuntimeError(
+            f"{item.get('display_name', 'API')} returned no image output."
+        )
+
+    first = data[0]
+    if first.get("b64_json"):
+        return base64.b64decode(first["b64_json"])
+    if first.get("url"):
+        with urlopen(first["url"], timeout=120) as response:
+            return response.read()
+    raise RuntimeError(
+        f"{item.get('display_name', 'API')} returned no image data."
+    )
+
+
+def _pipeline_image(
+    pipeline_item: dict,
+    reference_paths: list[Path],
+    instruction: str,
+) -> tuple[bytes, str]:
+    """Generate one image from multiple independent reference inputs."""
+    service = str(pipeline_item.get("service") or "").strip().lower()
+    key = str(pipeline_item.get("value", "")).strip()
+
+    if not reference_paths:
+        raise RuntimeError("At least one reference image is required.")
+
+    if not _pipeline_key_is_usable(pipeline_item, "image"):
+        raise RuntimeError(
+            f"{pipeline_item.get('display_name', 'Selected API')} does not provide "
+            "image-generation capability."
+        )
+
+    if service == "gemini":
+        return (
+            _gemini_image(key, reference_paths, instruction, _provider_image_model(pipeline_item)),
+            _provider_image_model(pipeline_item),
+        )
+
+    if service == "openrouter":
+        model = _provider_image_model(pipeline_item)
+        return (
+            _openrouter_image(key, reference_paths, instruction, model),
+            model,
+        )
+
+    if service == "openai":
+        model = _provider_image_model(pipeline_item)
+        return _openai_image(key, reference_paths, instruction, model), model
+
+    model = _provider_image_model(pipeline_item)
+    return _generic_image(pipeline_item, reference_paths, instruction), model
+
+
+def _openrouter_image(
+    api_key: str,
+    paths: list[Path],
+    instruction: str,
+    model: str | None = None,
+) -> bytes:
+    selected_model = str(model or OPENROUTER_IMAGE_MODEL).strip()
+    if not selected_model:
+        raise RuntimeError(
+            "No OpenRouter image model is configured for the selected API key."
+        )
+
+    payload = {
+        "model": selected_model,
+        "prompt": instruction,
+        "input_references": [
+            {
+                "type": "image_url",
+                "image_url": {"url": _image_data_url(path)},
+            }
+            for path in paths
+        ],
+        "output_format": "png",
+    }
+
+    result = _openrouter_request(
+        api_key,
+        "images",
+        payload,
+        timeout=240,
+    )
+    data = result.get("data") or []
+    if not data:
+        raise RuntimeError("OpenRouter returned no image output.")
+
+    first = data[0]
+    if first.get("b64_json"):
+        return base64.b64decode(first["b64_json"])
+    if first.get("url"):
+        with urlopen(first["url"], timeout=120) as response:
+            return response.read()
+
+    raise RuntimeError("OpenRouter returned no image data.")
 
 @app.post("/api/images/generate")
 async def generate_output_image(
@@ -3000,18 +3933,15 @@ async def generate_output_image(
         )
         reference_entries = [(1, reference_path, filename)]
 
-    reference_path = _build_multi_reference_sheet(reference_entries)
+    reference_paths = _prepare_reference_paths(reference_entries)
     reference_map = "; ".join(
         f"{number} = {name}" for number, _, name in reference_entries
     )
-    numbered_instruction = (
-        f"The supplied reference image is a numbered reference sheet. The available references are: {reference_map}. "
-        "When the user's prompt mentions a number such as 1, 2, or 3, use the corresponding numbered reference "
-        "from the sheet. Do not substitute a different reference. If multiple numbers are mentioned, use all of "
-        "those references together as instructed.\n\n"
-        + _generation_instruction(prompt, template_json)
+    instruction = _generation_instruction(
+        prompt,
+        template_json,
+        reference_map=reference_map,
     )
-    instruction = numbered_instruction
 
     errors: list[str] = []
     key_id = ""
@@ -3027,7 +3957,7 @@ async def generate_output_image(
             item = candidate_item
             image_bytes, image_model = _pipeline_image(
                 candidate_item,
-                reference_path,
+                reference_paths,
                 instruction,
             )
             API_KEY_STATE["pipeline_key_id"] = candidate_id
@@ -3840,3 +4770,21 @@ async def generate_template_endpoint(
                 f"{exc}"
             ),
         ) from exc
+
+# -------------------------------------------------------------------
+# Outermost CORS wrapper
+# -------------------------------------------------------------------
+# Wrapping the complete FastAPI application ensures CORS headers are also
+# present when an unexpected exception escapes the route/middleware stack.
+# Without this, the browser can report a misleading CORS error for a real
+# backend 500 response.
+app = CORSMiddleware(
+    app,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
