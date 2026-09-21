@@ -442,9 +442,9 @@ class CanvaMCPService:
 
             assert self.oauth_provider is not None
 
-            async with httpx2.AsyncClient(
+            async with httpx.AsyncClient(
                 auth=self.oauth_provider,
-                timeout=httpx2.Timeout(
+                timeout=httpx.Timeout(
                     30.0,
                     read=300.0,
                 ),
@@ -517,9 +517,9 @@ class CanvaMCPService:
         if arguments is None:
             arguments = {}
 
-        async with httpx2.AsyncClient(
+        async with httpx.AsyncClient(
             auth=self.oauth_provider,
-            timeout=httpx2.Timeout(
+            timeout=httpx.Timeout(
                 30.0,
                 read=300.0,
             ),
@@ -649,7 +649,7 @@ class CanvaMCPService:
             "code_verifier": self.connect_code_verifier,
         }
         basic = base64.b64encode(f"{self._connect_client_id()}:{self._connect_client_secret()}".encode("utf-8")).decode("ascii")
-        async with httpx2.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 CANVA_CONNECT_TOKEN_URL,
                 data=data,
@@ -697,7 +697,7 @@ class CanvaMCPService:
             "refresh_token": refresh_token,
         }
         basic = base64.b64encode(f"{self._connect_client_id()}:{self._connect_client_secret()}".encode("utf-8")).decode("ascii")
-        async with httpx2.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 CANVA_CONNECT_TOKEN_URL,
                 data=data,
@@ -744,7 +744,7 @@ class CanvaMCPService:
         elif suffix == ".gif":
             mime = "image/gif"
 
-        async with httpx2.AsyncClient(timeout=httpx2.Timeout(30.0, read=300.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
             response = await client.post(
                 f"{CANVA_CONNECT_API_URL}/asset-uploads",
                 content=content,
@@ -777,7 +777,7 @@ class CanvaMCPService:
                 )
             await asyncio.sleep(delay)
             delay = min(delay * 1.4, 2.5)
-            async with httpx2.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 poll = await client.get(
                     f"{CANVA_CONNECT_API_URL}/asset-uploads/{quote(job_id)}",
                     headers={"Authorization": f"Bearer {token}"},
@@ -819,7 +819,7 @@ class CanvaMCPService:
             "asset_id": asset_id,
             "title": Path(asset_name).stem[:255] or "Generated Image",
         }
-        async with httpx2.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{CANVA_CONNECT_API_URL}/designs",
                 json=payload,
