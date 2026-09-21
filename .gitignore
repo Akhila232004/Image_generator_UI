@@ -1,19 +1,39 @@
-﻿# Python Environment
+﻿# Node dependencies
+node_modules/
+/dist
+.env
+
+# Python Virtual Environments
 .venv/
+.venv-sd/
+backend/.venv-sd/
 venv/
-__pycache__/
+ENV/
+
+# Python caching
+**/__pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Google API Private Secrets
-backend/credentials.json
-backend/token.json
+# Application & Test Outputs
+*.png
+output/
+backend/output/
+backend/sd15_test_output.png
 
-# Local Uploads, Cache, and Temp Templates
-backend/uploads/
-backend/templates/
-backend/input/
+# Sensitive Secrets, Tokens, and Credentials
+*.json
+.canva_connect_tokens.json
+backend/.canva_connect_tokens.json
+backend/app/.canva_connect_tokens.json
+drive_config.json
+backend/drive_config.json
+service-account.json
+backend/service-account.json
 
-# Frontend Dependencies
-frontend/node_modules/
-frontend/dist/
-frontend/build/
+# IDEs and System files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
