@@ -14,7 +14,7 @@ from typing import Any
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse, urlencode
 
-import httpx2
+import httpx
 from mcp import Client
 from mcp.client.auth import (
     AuthorizationCodeResult,
