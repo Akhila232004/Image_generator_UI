@@ -4,3 +4,4 @@ python-multipart
 Pillow
 google-genai
 python-dotenv
+mcp
