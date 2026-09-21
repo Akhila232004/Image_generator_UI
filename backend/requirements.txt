@@ -4,4 +4,5 @@ python-multipart
 Pillow
 google-genai
 python-dotenv
-mcpgoogle-auth-oauthlib
+mcp
+google-auth-oauthlib
