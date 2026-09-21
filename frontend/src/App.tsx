@@ -41,6 +41,8 @@ type ReferenceType =
   | "image"
   | "gif"
   | "pdf"
+  | "ppt"
+  | "pptx"
   | "video"
   | "youtube"
   | "image-link";
@@ -99,6 +101,14 @@ function getReferenceType(
 
   if (normalizedExtension === ".pdf") {
     return "pdf";
+  }
+
+  if (normalizedExtension === ".ppt") {
+    return "ppt";
+  }
+
+  if (normalizedExtension === ".pptx") {
+    return "pptx";
   }
 
   if (
@@ -169,6 +179,12 @@ function formatReferenceType(
 
     case "pdf":
       return "PDF";
+
+    case "ppt":
+      return "PowerPoint";
+
+    case "pptx":
+      return "PowerPoint";
 
     case "video":
       return "Video";
@@ -2579,52 +2595,63 @@ function ImageGenerator({
 
 
     /*
-     * Keep PDF/video uploads
-     * as local references.
+     * Video/YouTube remain browser-local references. PDF/PPT/PPTX are now
+     * persisted by the backend so Canva Connect can import the original file
+     * bytes directly and preserve editable document elements where supported.
      */
 
-    const objectUrl =
-      URL.createObjectURL(
-        file,
-      );
+    if (type === "pdf" || type === "ppt" || type === "pptx") {
+      setIsTaggingImages(false);
+      setError("");
+      const formData = new FormData();
+      formData.append("file", file);
 
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/inputs/upload`, {
+          method: "POST",
+          body: formData,
+          credentials: "include",
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(String(data?.detail || "Unable to upload the document reference."));
+        }
 
+        setSelectedInputIds([]);
+        setTemplateResult(null);
+        setReference({
+          type,
+          name: String(data.name || file.name),
+          url: `${API_BASE_URL}${String(data.url || "")}`,
+          size: Number(data.size || file.size),
+          mimeType: String(data.mimeType || file.type || "application/octet-stream"),
+          source: "upload",
+          sourceId: String(data.id || data.name || file.name),
+        });
+        await loadInputFiles();
+        setShowReferenceModal(false);
+        setShowUrlInput(false);
+      } catch (err) {
+        console.error("Document reference upload failed:", err);
+        setError(err instanceof Error ? err.message : "Unable to upload the document reference.");
+      }
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
     setSelectedInputIds([]);
-
-    setTemplateResult(
-      null,
-    );
-
+    setTemplateResult(null);
     setError("");
-
-
     setReference({
       type,
-
-      name:
-        file.name,
-
-      url:
-        objectUrl,
-
-      size:
-        file.size,
-
-      mimeType:
-        file.type,
-
-      source:
-        "upload",
+      name: file.name,
+      url: objectUrl,
+      size: file.size,
+      mimeType: file.type,
+      source: "upload",
     });
-
-
-    setShowReferenceModal(
-      false,
-    );
-
-    setShowUrlInput(
-      false,
-    );
+    setShowReferenceModal(false);
+    setShowUrlInput(false);
   }
 
 
@@ -3008,13 +3035,115 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
+  async function handleGenerateEditableDocument(currentReference: ReferenceData) {
+    setError("");
+    setCanvaMessage("");
+    setCanvaAiMessage("");
+    setCanvaEditUrl("");
+    setCanvaDesignId("");
+    setCanvaAiTransactionId("");
+    setCanvaAiPreviewUrl("");
+    setEnhancedImageSaved(false);
+    setGeneratedImageSaveMessage("");
+    setIsGeneratingImage(true);
+
+    try {
+      if (selectedApiKeys.length === 0) {
+        throw new Error("Select at least one text-capable API key before applying document changes.");
+      }
+
+      const selectionResponse = await fetch(`${API_BASE_URL}/api/api-keys/select`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_ids: selectedApiKeys }),
+        credentials: "include",
+      });
+      const selectionData = await selectionResponse.json().catch(() => null);
+      if (!selectionResponse.ok) {
+        throw new Error(String(selectionData?.detail || "Unable to synchronize the selected API keys."));
+      }
+
+      const sourceType = currentReference.source === "google-drive"
+        ? "google-drive"
+        : currentReference.source === "input-folder"
+          ? "input-folder"
+          : "upload";
+      const source = currentReference.sourceId || currentReference.url;
+      if (!source || source.startsWith("blob:")) {
+        throw new Error("The selected document reference is not available to the backend.");
+      }
+
+      const formData = new FormData();
+      formData.append("source_type", sourceType);
+      formData.append("source", source.replace(/^drive:/, ""));
+      formData.append("filename", currentReference.name);
+      formData.append("content_type", currentReference.mimeType || "");
+
+      const response = await fetch(`${API_BASE_URL}/api/canva/create-from-reference-document`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => null);
+
+      if (response.status === 401 && data?.detail) {
+        const authorizationUrl = response.headers.get("X-Canva-Authorization-URL");
+        if (authorizationUrl) {
+          window.open(authorizationUrl, "_blank", "noopener,noreferrer");
+        }
+      }
+      if (!response.ok) {
+        throw new Error(String(data?.detail || "Unable to import the document into Canva."));
+      }
+      if (!data?.design_id || !data?.edit_url) {
+        throw new Error("Canva imported the document but did not return a design ID and edit URL.");
+      }
+
+      setCanvaDesignId(String(data.design_id));
+      setCanvaEditUrl(String(data.edit_url));
+      setCanvaMessage("Document imported into Canva as an editable design. Preparing your requested changes with Canva MCP...");
+      setCanvaAiCommand(templatePrompt.trim());
+
+      // Automatically prepare the exact user-requested changes against the
+      // imported Canva design. The user can review the MCP draft before saving.
+      const editForm = new FormData();
+      editForm.append("design_id", String(data.design_id));
+      editForm.append("command", templatePrompt.trim());
+      const editResponse = await fetch(`${API_BASE_URL}/api/canva/ai-edit/prepare`, {
+        method: "POST",
+        body: editForm,
+        credentials: "include",
+      });
+      const editData = await editResponse.json().catch(() => null);
+      if (!editResponse.ok) {
+        throw new Error(String(editData?.detail || "The document was imported into Canva, but the requested changes could not be prepared."));
+      }
+
+      setCanvaAiTransactionId(String(editData.transaction_id || ""));
+      setCanvaAiPreviewUrl(String(editData.preview_url || ""));
+      setCanvaAiMessage("Your requested changes are prepared as a Canva MCP draft. Review them in Canva, then click Save AI Changes.");
+      setGeneratedImageFilename(`${currentReference.name.replace(/\.[^.]+$/, "")}_enhanced.${currentReference.type === "ppt" || currentReference.type === "pptx" ? "pptx" : "pdf"}`);
+      setGeneratedImageModel("");
+      setGeneratedImageProvider("Canva MCP");
+      window.open(String(data.edit_url), "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("Editable document generation failed:", err);
+      setError(err instanceof Error ? err.message : "Unable to generate the editable document.");
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  }
+
   async function handleGenerateImage() {
 
-    if (selectedInputIds.length === 0 || !reference) {
-      setError("Please select at least one reference image.");
+    const isDocumentReference = Boolean(
+      reference && ["pdf", "ppt", "pptx"].includes(reference.type),
+    );
+
+    if (!reference || (!isDocumentReference && selectedInputIds.length === 0)) {
+      setError(isDocumentReference ? "Please select a document reference." : "Please select at least one reference image.");
       return;
     }
-
 
     if (!templatePrompt.trim()) {
 
@@ -3026,16 +3155,13 @@ function ImageGenerator({
     }
 
 
-    if (
-      reference.type === "pdf" ||
-      reference.type === "video" ||
-      reference.type === "youtube"
-    ) {
+    if (reference.type === "video" || reference.type === "youtube") {
+      setError("Video and YouTube references are not supported for this generation flow yet.");
+      return;
+    }
 
-      setError(
-        "Image generation currently requires an image reference.",
-      );
-
+    if (reference.type === "pdf" || reference.type === "ppt" || reference.type === "pptx") {
+      await handleGenerateEditableDocument(reference);
       return;
     }
 
@@ -3392,6 +3518,16 @@ function ImageGenerator({
     }
 
 
+    if (currentReference.type === "ppt" || currentReference.type === "pptx") {
+      return (
+        <div className="media-preview document-preview">
+          <div className="document-icon powerpoint-document-icon">PPT</div>
+          <div className="document-name">{currentReference.name}</div>
+        </div>
+      );
+    }
+
+
     if (
       currentReference.type ===
       "video"
@@ -3472,6 +3608,22 @@ const handleOpenGeneratedImageInCanva = async () => {
         "noopener,noreferrer",
       );
       setCanvaMessage("Canva authorization opened in a new tab. Approve access, return here, and click Open / Edit in Canva again.");
+      return;
+    }
+
+    if (reference && ["pdf", "ppt", "pptx"].includes(reference.type)) {
+      const documentForm = new FormData();
+      documentForm.append("source_type", reference.source === "google-drive" ? "google-drive" : reference.source === "input-folder" ? "input-folder" : "upload");
+      documentForm.append("source", String(reference.sourceId || reference.url).replace(/^drive:/, ""));
+      documentForm.append("filename", reference.name);
+      documentForm.append("content_type", reference.mimeType || "");
+      const documentResponse = await fetch(`${API_BASE_URL}/api/canva/create-from-reference-document`, { method: "POST", body: documentForm, credentials: "include" });
+      const documentData = await documentResponse.json().catch(() => null);
+      if (!documentResponse.ok) throw new Error(String(documentData?.detail || "Unable to import the document into Canva."));
+      setCanvaEditUrl(String(documentData.edit_url || ""));
+      setCanvaDesignId(String(documentData.design_id || ""));
+      setCanvaMessage("Editable document is open in Canva. Use AI Edit below or edit manually in Canva.");
+      window.open(String(documentData.edit_url), "_blank", "noopener,noreferrer");
       return;
     }
 
@@ -3609,13 +3761,15 @@ const handleSaveEnhancedCanvaToDrive = async () => {
     formData.append("design_id", canvaDesignId);
     formData.append("folder_id", selectedOutputFolderId);
     formData.append("filename", generatedImageFilename || "enhanced-image.png");
+    const isDocument = Boolean(reference && ["pdf", "ppt", "pptx"].includes(reference.type));
+    formData.append("file_format", isDocument ? (reference?.type === "pdf" ? "pdf" : "pptx") : "png");
 
     const response = await fetch(
       `${API_BASE_URL}/api/canva/export-to-drive`,
       { method: "POST", body: formData, credentials: "include" },
     );
     const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(data?.detail || "Unable to save the enhanced Canva image to Google Drive."));
+    if (!response.ok) throw new Error(String(data?.detail || "Unable to save the final Canva file to Google Drive."));
 
     setEnhancedImageSaved(true);
     setGeneratedImageSaveMessage(String(data?.message || "Enhanced image saved to Google Drive / outputs."));
@@ -5639,8 +5793,12 @@ const handleSaveEnhancedCanvaToDrive = async () => {
               }
             >
               {isGeneratingImage
-                ? "Generating Image..."
-                : "Generate Image"}
+                ? reference && ["pdf", "ppt", "pptx"].includes(reference.type)
+                  ? "Importing & Applying Changes..."
+                  : "Generating Image..."
+                : reference && ["pdf", "ppt", "pptx"].includes(reference.type)
+                  ? "Generate Editable Document"
+                  : "Generate Image"}
             </button>
 
 
@@ -5847,7 +6005,15 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 {canvaDesignId && (
   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "12px" }}>
     <button type="button" className="primary-button" onClick={handleSaveEnhancedCanvaToDrive} disabled={isSavingEnhancedToDrive}>
-      {isSavingEnhancedToDrive ? "Saving Enhanced Image..." : enhancedImageSaved ? "Enhanced Image Saved to Drive" : "Save Final Enhanced Image to Drive"}
+      {isSavingEnhancedToDrive
+        ? "Saving Final File..."
+        : enhancedImageSaved
+          ? "Final File Saved to Drive"
+          : reference && reference.type === "pdf"
+            ? "Save Final PDF to Drive"
+            : reference && (reference.type === "ppt" || reference.type === "pptx")
+              ? "Save Final PPTX to Drive"
+              : "Save Final Enhanced Image to Drive"}
     </button>
   </div>
 )}
@@ -6161,7 +6327,7 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 
                   <small>
                     PNG, JPG, WEBP, GIF,
-                    PDF, MP4 and more
+                    PDF, PPT, PPTX, MP4 and more
                   </small>
 
                 </span>
@@ -6262,6 +6428,8 @@ const handleSaveEnhancedCanvaToDrive = async () => {
                 image/webp,
                 image/gif,
                 application/pdf,
+                application/vnd.ms-powerpoint,
+                application/vnd.openxmlformats-officedocument.presentationml.presentation,
                 video/mp4,
                 video/webm,
                 video/quicktime

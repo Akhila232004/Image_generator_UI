@@ -486,6 +486,20 @@ class CanvaMCPService:
     # Generic Canva MCP tool call
     # ================================================================
 
+    async def get_editable_design_snapshot(self, design_id: str) -> dict[str, Any]:
+        """Return Canva design content used by the document/image AI edit flow.
+
+        This helper intentionally relies on Canva MCP's design-content tools so
+        imported PDF/PPT/PPTX designs and regular Canva designs use the same
+        editing path.
+        """
+        design_id = str(design_id or "").strip()
+        if not design_id:
+            raise ValueError("A Canva design ID is required.")
+
+        result = await self.call_tool("get-design-content", {"design_id": design_id})
+        return self._extract_payload(result)
+
     async def call_tool(
         self,
         tool_name: str,

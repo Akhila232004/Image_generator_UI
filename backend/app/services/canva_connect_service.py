@@ -276,6 +276,88 @@ class CanvaConnectService:
 
         raise RuntimeError("Timed out waiting for Canva to finish uploading the image.")
 
+    async def import_design_from_local_file(self, local_path: Path) -> dict:
+        """Import a local PDF/PPT/PPTX directly into Canva as a design.
+
+        Canva's Design Import API accepts PDF and Microsoft PowerPoint files as
+        binary uploads, so no public URL, Cloudflare tunnel, or ngrok is needed.
+        """
+        path = Path(local_path)
+        if not path.exists() or not path.is_file():
+            raise RuntimeError("The reference document was not found on the server.")
+
+        suffix = path.suffix.lower()
+        mime_types = {
+            ".pdf": "application/pdf",
+            ".ppt": "application/vnd.ms-powerpoint",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }
+        mime_type = mime_types.get(suffix)
+        if not mime_type:
+            raise RuntimeError("Only PDF, PPT, and PPTX files can be imported into Canva.")
+
+        title = path.stem[:50] or "Imported reference"
+        title_base64 = base64.b64encode(title.encode("utf-8")).decode("ascii")
+        token = await self.access_token()
+
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(
+                f"{self.API_BASE}/imports",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/octet-stream",
+                    "Import-Metadata": json.dumps({
+                        "title_base64": title_base64,
+                        "mime_type": mime_type,
+                    }),
+                },
+                content=path.read_bytes(),
+            )
+
+        if response.status_code >= 400:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            raise RuntimeError(f"Canva document import failed: {detail}")
+
+        payload = response.json()
+        job = payload.get("job") or {}
+        job_id = str(job.get("id") or payload.get("id") or "").strip()
+        if not job_id:
+            raise RuntimeError(f"Canva did not return a design import job ID: {payload}")
+
+        for _ in range(120):
+            result = await self._request("GET", f"/imports/{job_id}")
+            current = result.get("job") or result
+            status = str(current.get("status") or "").lower()
+            if status == "success":
+                design = current.get("design") or result.get("design") or {}
+                design_id = str(design.get("id") or "").strip()
+                urls = design.get("urls") or {}
+                edit_url = str(urls.get("edit_url") or "").strip()
+                view_url = str(urls.get("view_url") or "").strip()
+                if design_id and not edit_url:
+                    edit_url = f"https://www.canva.com/design/{design_id}/edit"
+                if not design_id:
+                    raise RuntimeError(f"Canva import succeeded but returned no design ID: {result}")
+                return {
+                    "success": True,
+                    "job_id": job_id,
+                    "design_id": design_id,
+                    "edit_url": edit_url,
+                    "view_url": view_url,
+                    "design": design,
+                    "source_file": path.name,
+                    "mime_type": mime_type,
+                }
+            if status == "failed":
+                error = current.get("error") or {}
+                raise RuntimeError(str(error.get("message") or current.get("message") or "Canva document import failed."))
+            await self._sleep(2)
+
+        raise RuntimeError("Timed out waiting for Canva to import the reference document.")
+
     async def create_design_copy(
         self,
         source_design_id: str,
@@ -570,14 +652,17 @@ class CanvaConnectService:
             "public_tunnel_required": False,
         }
 
-    async def export_design_png(self, design_id: str) -> bytes:
-        payload = {
-            "design_id": design_id,
-            "format": {
-                "type": "png",
-            },
-        }
-        result = await self._request("POST", "/exports", json=payload)
+    async def export_design(self, design_id: str, file_format: str = "png") -> bytes:
+        """Export a Canva design as PNG, PDF, or PPTX."""
+        normalized = str(file_format or "png").strip().lower()
+        if normalized not in {"png", "pdf", "pptx"}:
+            raise RuntimeError("Supported Canva export formats are PNG, PDF, and PPTX.")
+
+        result = await self._request(
+            "POST",
+            "/exports",
+            json={"design_id": design_id, "format": {"type": normalized}},
+        )
         job = result.get("job") or {}
         export_id = str(job.get("id") or "")
         if not export_id:
@@ -601,6 +686,9 @@ class CanvaConnectService:
             await self._sleep(2)
 
         raise RuntimeError("Timed out waiting for Canva to finish exporting the design.")
+
+    async def export_design_png(self, design_id: str) -> bytes:
+        return await self.export_design(design_id, "png")
 
     @staticmethod
     async def _sleep(seconds: float) -> None:

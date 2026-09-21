@@ -19,7 +19,7 @@ CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 
 # Current Image Generator References folder.
-DRIVE_FOLDER_ID = "1b_B5PC-bptrUNol-6ROc6k3ri--9iJvy"
+DRIVE_FOLDER_ID = "1JMjprxQusftbFRP12SgEIvzRE_X6wcSs"
 
 
 def get_drive_service():

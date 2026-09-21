@@ -5978,3 +5978,49 @@ textarea:focus-visible {
     font-size: 8px !important;
   }
 }
+
+/* Document reference support: PDF / PPT / PPTX */
+.document-preview {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
+  background: linear-gradient(145deg, #fbfcff, #f2f4fb);
+}
+
+.powerpoint-document-icon {
+  color: #b7472a;
+  background: #fff0eb;
+}
+
+.document-preview .document-name {
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.document-reference-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+@media (max-width: 820px) {
+  .document-preview {
+    min-height: 170px;
+  }
+}
