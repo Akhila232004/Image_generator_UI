@@ -58,6 +58,10 @@ from app.services.document_reference_service import (
     document_mime_type,
 )
 
+from app.services.editable_design_service import (
+    build_editable_pptx,
+)
+
 
 # -------------------------------------------------------------------
 # Application
@@ -121,6 +125,17 @@ TEMPLATES_DIR.mkdir(
     exist_ok=True,
 )
 
+EDITABLE_DESIGNS_DIR = (
+    BASE_DIR /
+    "output" /
+    "editable_designs"
+)
+
+EDITABLE_DESIGNS_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
 
 # -------------------------------------------------------------------
 # API key setup / in-memory session
@@ -131,6 +146,50 @@ DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
+
+
+def initialize_drive_oauth_files() -> None:
+    """Initialize Google Drive OAuth files from Railway environment variables.
+
+    Local development keeps using the existing credentials.json/token.json
+    files. Railway can provide the company user OAuth files as base64-encoded
+    JSON environment variables without committing secrets to the repository.
+    """
+    credentials_b64 = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON_B64", "").strip()
+    token_b64 = os.getenv("GOOGLE_DRIVE_TOKEN_JSON_B64", "").strip()
+
+    # Local development: use the files already present in backend/.
+    if not credentials_b64 and not token_b64:
+        return
+
+    if not credentials_b64 or not token_b64:
+        raise RuntimeError(
+            "Google Drive production OAuth configuration is incomplete. "
+            "Both GOOGLE_DRIVE_CREDENTIALS_JSON_B64 and "
+            "GOOGLE_DRIVE_TOKEN_JSON_B64 must be configured."
+        )
+
+    try:
+        credentials_data = json.loads(
+            base64.b64decode(credentials_b64, validate=True).decode("utf-8")
+        )
+        token_data = json.loads(
+            base64.b64decode(token_b64, validate=True).decode("utf-8")
+        )
+        if not isinstance(credentials_data, dict):
+            raise ValueError("Google Drive credentials JSON must be an object.")
+        if not isinstance(token_data, dict):
+            raise ValueError("Google Drive token JSON must be an object.")
+
+        CREDENTIALS_FILE.write_text(json.dumps(credentials_data, indent=2), encoding="utf-8")
+        TOKEN_FILE.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to initialize Google Drive OAuth files from Railway environment variables."
+        ) from exc
+
+
+initialize_drive_oauth_files()
 
 API_KEY_STATE = {
     "keys": {},
@@ -1315,247 +1374,64 @@ def require_drive_configuration():
     return folder_id, folder_name
 
 
-def _drive_folder_metadata(service, folder_id: str) -> dict:
-    """Validate that the current OAuth account can access a live Drive folder."""
-    folder_id = normalize_drive_folder_id(folder_id)
-    if not folder_id:
-        raise RuntimeError("Google Drive folder ID is empty.")
-
-    metadata = (
-        service.files()
-        .get(
-            fileId=folder_id,
-            fields="id,name,mimeType,trashed,parents",
-        )
-        .execute()
-    )
-
-    if metadata.get("trashed"):
-        raise RuntimeError(f'Google Drive folder "{folder_id}" is in the trash.')
-
-    if metadata.get("mimeType") != "application/vnd.google-apps.folder":
-        raise RuntimeError(f'Google Drive ID "{folder_id}" is not a folder.')
-
-    return metadata
-
-
-def _find_drive_folder_by_name(service, folder_name: str) -> dict:
-    """Find an exact-name accessible folder for the current OAuth account."""
-    folder_name = str(folder_name or "").strip()
-    if not folder_name:
-        raise RuntimeError("Google Drive folder name is empty.")
+def resolve_drive_folder_id(
+    service,
+    folder_id: str,
+    folder_name: str,
+) -> str:
+    if folder_id:
+        return folder_id
 
     escaped_name = folder_name.replace("'", "\\'")
 
-    result = (
-        service.files()
-        .list(
-            q=(
-                f"name = '{escaped_name}' "
-                "and mimeType = 'application/vnd.google-apps.folder' "
-                "and trashed = false"
-            ),
-            pageSize=20,
-            orderBy="name",
-            fields="files(id,name,mimeType,trashed,parents)",
-        )
-        .execute()
-    )
+    result = service.files().list(
+        q=(
+            f"name = '{escaped_name}' "
+            "and mimeType = 'application/vnd.google-apps.folder' "
+            "and trashed = false"
+        ),
+        pageSize=20,
+        fields="files(id,name)",
+    ).execute()
 
     folders = result.get("files", [])
+
     if not folders:
         raise RuntimeError(
-            f'Google Drive folder "{folder_name}" was not found '
-            "for the currently authorized Google account."
+            f'Google Drive folder "{folder_name}" was not found.'
         )
 
-    return folders[0]
+    return str(folders[0]["id"])
 
 
-def resolve_drive_folder_id(service, folder_id: str, folder_name: str) -> str:
-    """
-    Resolve a Drive folder for the current OAuth account.
-
-    A valid accessible ID is preferred. If the configured ID is stale but
-    a configured name exists, an exact-name lookup is attempted in the
-    currently authorized account.
-    """
-    folder_id = normalize_drive_folder_id(folder_id)
-    folder_name = str(folder_name or "").strip()
-
-    if folder_id:
-        try:
-            return str(_drive_folder_metadata(service, folder_id)["id"])
-        except Exception as id_error:
-            if not folder_name:
-                raise RuntimeError(
-                    f'Configured Google Drive folder ID "{folder_id}" '
-                    "is not accessible by the currently authorized account. "
-                    f"Original error: {id_error}"
-                ) from id_error
-
-            print(
-                f'Configured Drive folder ID "{folder_id}" is not accessible: '
-                f"{id_error}"
-            )
-            print(f'Attempting exact-name recovery for "{folder_name}"...')
-
-    metadata = _find_drive_folder_by_name(service, folder_name)
-    resolved_id = str(metadata["id"])
-
-    print(
-        f'Google Drive folder "{folder_name}" resolved to "{resolved_id}" '
-        "for the current account."
-    )
-    return resolved_id
-
-
-def _configured_drive_folder_name(folder_id: str, folder_configs: list[dict]) -> str:
-    """Return the configured folder name associated with a folder ID."""
-    folder_id = normalize_drive_folder_id(folder_id)
-
-    for item in folder_configs:
-        if not isinstance(item, dict):
-            continue
-        item_id = normalize_drive_folder_id(str(item.get("id", "") or ""))
-        if item_id == folder_id:
-            return str(item.get("name", "") or "").strip()
-
-    return ""
-
-
-def resolve_configured_drive_folder(
-    service,
-    folder_id: str,
-    folder_configs: list[dict],
-    *,
-    label: str = "Google Drive folder",
-) -> tuple[str, str]:
-    """Resolve a configured folder and return its current ID and name."""
-    folder_id = normalize_drive_folder_id(folder_id)
-    if not folder_id:
-        raise RuntimeError(f"{label} ID is empty.")
-
-    configured_name = _configured_drive_folder_name(
-        folder_id,
-        folder_configs,
-    )
-
-    resolved_id = resolve_drive_folder_id(
-        service,
-        folder_id,
-        configured_name,
-    )
-
-    metadata = _drive_folder_metadata(service, resolved_id)
-    resolved_name = str(
-        metadata.get("name") or configured_name or label
-    ).strip()
-
-    return resolved_id, resolved_name
-
-
-def ensure_drive_outputs_folder(
-    service,
-    parent_folder_id: str,
-    parent_folder_name: str = "",
-) -> str:
-    """
-    Return the `outputs` child folder, creating it when necessary.
-
-    The parent is first validated against the current OAuth account, which
-    prevents an inaccessible old-account folder ID from producing a confusing
-    Drive 404 during the outputs query.
-    """
-    parent_folder_id = normalize_drive_folder_id(parent_folder_id)
-    parent_folder_name = str(parent_folder_name or "").strip()
-
-    if not parent_folder_id:
-        raise RuntimeError("The Google Drive parent folder ID is empty.")
-
-    try:
-        parent_metadata = _drive_folder_metadata(
-            service,
-            parent_folder_id,
-        )
-        resolved_parent_id = str(parent_metadata["id"])
-        resolved_parent_name = str(
-            parent_metadata.get("name") or parent_folder_name
-        ).strip()
-    except Exception as parent_error:
-        if not parent_folder_name:
-            raise RuntimeError(
-                f'Google Drive parent folder "{parent_folder_id}" is not '
-                "accessible by the currently authorized account. "
-                f"Original error: {parent_error}"
-            ) from parent_error
-
-        print(
-            f'Parent folder ID "{parent_folder_id}" is not accessible: '
-            f"{parent_error}"
-        )
-        print(
-            f'Attempting exact-name recovery for "{parent_folder_name}"...'
-        )
-
-        recovered = _find_drive_folder_by_name(
-            service,
-            parent_folder_name,
-        )
-        resolved_parent_id = str(recovered["id"])
-        resolved_parent_name = str(
-            recovered.get("name") or parent_folder_name
-        ).strip()
-
-    escaped_parent_id = resolved_parent_id.replace("'", "\\'")
-
-    result = (
-        service.files()
-        .list(
-            q=(
-                f"'{escaped_parent_id}' in parents "
-                "and name = 'outputs' "
-                "and mimeType = 'application/vnd.google-apps.folder' "
-                "and trashed = false"
-            ),
-            pageSize=10,
-            fields="files(id,name,mimeType,trashed,parents)",
-        )
-        .execute()
-    )
-
+def ensure_drive_outputs_folder(service, parent_folder_id: str) -> str:
+    """Return the `outputs` child folder, creating it when necessary."""
+    result = service.files().list(
+        q=(
+            f"'{parent_folder_id}' in parents "
+            "and name = 'outputs' "
+            "and mimeType = 'application/vnd.google-apps.folder' "
+            "and trashed = false"
+        ),
+        pageSize=10,
+        fields="files(id,name)",
+    ).execute()
     folders = result.get("files", [])
     if folders:
-        outputs_id = str(folders[0]["id"])
-        print(
-            f'Found existing Drive/outputs folder {outputs_id} '
-            f'under "{resolved_parent_name}".'
-        )
-        return outputs_id
+        return str(folders[0]["id"])
 
-    created = (
-        service.files()
-        .create(
-            body={
-                "name": "outputs",
-                "mimeType": "application/vnd.google-apps.folder",
-                "parents": [resolved_parent_id],
-            },
-            fields="id,name,mimeType,parents",
-        )
-        .execute()
-    )
-
-    outputs_id = str(created["id"])
-    print(
-        f'Created Drive/outputs folder {outputs_id} '
-        f'under "{resolved_parent_name}".'
-    )
-    return outputs_id
+    created = service.files().create(
+        body={
+            "name": "outputs",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id],
+        },
+        fields="id,name",
+    ).execute()
+    return str(created["id"])
 
 
 def get_drive_files(
-
     service,
     folder_id: str,
 ) -> list[dict]:
@@ -2032,8 +1908,12 @@ async def upload_api_keys_file(
     API_KEY_STATE["drive_output_folders"] = drive_output_folders
     API_KEY_STATE["drive_folder_id"] = drive_folders[0]["id"] if drive_folders else ""
     API_KEY_STATE["drive_folder_name"] = drive_folders[0]["name"] if drive_folders else ""
-    API_KEY_STATE["drive_output_folder_id"] = ""
-    API_KEY_STATE["drive_output_folder_name"] = "outputs"
+    API_KEY_STATE["drive_output_folder_id"] = (
+        drive_output_folders[0]["id"] if drive_output_folders else ""
+    )
+    API_KEY_STATE["drive_output_folder_name"] = (
+        drive_output_folders[0]["name"] if drive_output_folders else ""
+    )
 
     API_KEY_STATE["gemini_model"] = (
         find_config_value(
@@ -2169,10 +2049,10 @@ def get_drive_inputs():
         )
 
         API_KEY_STATE["drive_folder_id"] = resolved_folder_id
-        # Create the generated-image destination once the reference folder is available.
-        output_folder_id = ensure_drive_outputs_folder(service, resolved_folder_id)
-        API_KEY_STATE["drive_output_folder_id"] = output_folder_id
-        API_KEY_STATE["drive_output_folder_name"] = "outputs"
+        API_KEY_STATE["drive_folder_name"] = folder_name
+
+        # Reference loading must never create an output folder. Dedicated
+        # output folders are configured separately via the API key file.
         persist_drive_configuration()
 
         return get_drive_files(
@@ -2715,9 +2595,70 @@ async def canva_create_from_generated_image(
         raise HTTPException(status_code=502, detail=f"Unable to create the editable Canva design: {message}") from exc
 
 
+def _gemini_ai_text_completion(api_key: str, model: str, instruction: str) -> str:
+    """Run Canva edit-operation planning through the native Gemini SDK.
+
+    Gemini is a built-in provider in this application, so Canva AI editing
+    must not require a custom GEMINI_BASE_URL just to translate a command
+    into structured Canva MCP operations.
+    """
+    api_key = str(api_key or "").strip()
+    model = str(model or "").strip()
+    if not api_key:
+        raise RuntimeError("The selected Gemini API key is empty.")
+    if not model:
+        raise RuntimeError("No Gemini text model is configured for the selected API key.")
+
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as exc:
+        raise RuntimeError(
+            "The Gemini SDK is not installed in the backend environment. "
+            "Install the google-genai package and restart FastAPI."
+        ) from exc
+
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=instruction,
+            config=types.GenerateContentConfig(temperature=0.1),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Gemini AI edit planning failed: {exc}") from exc
+
+    text = str(getattr(response, "text", "") or "").strip()
+    if not text:
+        # Some SDK responses expose text through candidate parts instead of
+        # the convenience .text property. Keep a small compatibility fallback.
+        chunks = []
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                value = getattr(part, "text", None)
+                if value:
+                    chunks.append(str(value))
+        text = "".join(chunks).strip()
+
+    if not text:
+        raise RuntimeError("Gemini returned an empty response while planning the Canva edit.")
+    return text
+
+
 def _canva_ai_text_completion(pipeline_item: dict, instruction: str) -> str:
     """Use the selected text-capable API to turn an edit command into MCP operations."""
     service = str(pipeline_item.get("service") or "").strip().lower()
+
+    # Gemini has a native adapter. Do not route it through _generic_request(),
+    # which requires a custom BASE_URL and is intended only for unknown providers.
+    if service == "gemini":
+        return _gemini_ai_text_completion(
+            str(pipeline_item.get("value", "")).strip(),
+            _provider_text_model(pipeline_item),
+            instruction,
+        )
+
     if service == "claude":
         result = _claude_request(
             str(pipeline_item.get("value", "")).strip(),
@@ -2803,7 +2744,14 @@ content, text regions, media/fills and page information:
 Return ONLY valid JSON with this exact top-level shape:
 {{"operations":[...]}}
 
-Use only these Canva MCP operation types when applicable:
+The operations array must contain objects compatible with Canva MCP
+perform-editing-operations. For text changes, use objects such as:
+{{"type":"replace_text","element_id":"EXACT_ELEMENT_ID","text":"NEW TEXT","page_index":1}}
+For responsive text, use find_and_replace_text instead of replace_text.
+For other supported changes, include the exact element_id and required fields
+from the Canva transaction response. Never invent identifiers.
+
+Allowed operation types are:
 - replace_text
 - find_and_replace_text
 - update_title
@@ -2814,18 +2762,44 @@ Use only these Canva MCP operation types when applicable:
 - resize_element
 - format_text
 
-Use the exact element/page identifiers and existing text from the design response.
-Do not invent IDs. Do not delete pages. Do not return markdown or explanations.
-If the command cannot be safely mapped to an operation using the supplied design
-content, return {{"operations":[]}}.
+Interpret the user's command as an edit request. If it is a content-generation
+prompt rather than an explicit replacement, make the smallest safe text edits
+using the existing editable text elements and the user's requested content.
+Do not delete pages. Do not return markdown or explanations.
+Only return an empty operations array when the transaction response contains no
+editable element that can safely satisfy the request.
 """
         raw = _canva_ai_text_completion(pipeline_item, instruction)
         parsed = _extract_json_object(raw)
         operations = parsed.get("operations")
-        if not isinstance(operations, list) or not operations:
-            raise RuntimeError("The selected AI API could not map that command to a safe Canva edit.")
+        if not isinstance(operations, list):
+            raise RuntimeError("The AI edit operations response was invalid.")
         if not all(isinstance(item, dict) for item in operations):
             raise RuntimeError("The AI edit operations response was invalid.")
+
+        # A PDF can be imported successfully while still containing no
+        # addressable text/fill elements for the requested command (for
+        # example, a scanned/image-only PDF). Do not turn that into a 502.
+        # The imported Canva design is still usable for manual editing.
+        if not operations:
+            await canva_mcp_service.call_tool(
+                "cancel-editing-transaction",
+                {"transaction_id": transaction_id},
+            )
+            transaction_id = ""
+            return {
+                "success": True,
+                "design_id": design_id,
+                "transaction_id": "",
+                "operations": [],
+                "preview_url": "",
+                "no_op": True,
+                "message": (
+                    "The document was imported into Canva, but its current content "
+                    "does not expose an editable element that can safely apply "
+                    "that command. The Canva design is ready for manual editing."
+                ),
+            }
 
         perform_result = await canva_mcp_service.call_tool(
             "perform-editing-operations",
@@ -2914,7 +2888,7 @@ async def canva_export_to_drive(
 ):
     """
     Export the latest saved Canva design and save it directly to the
-    selected Google Drive/outputs folder.
+    selected dedicated Google Drive output folder.
 
     IMPORTANT:
     - The Canva export is kept in memory as bytes.
@@ -2947,12 +2921,15 @@ async def canva_export_to_drive(
             detail="Select a Google Drive output folder before saving.",
         )
 
-    configured_outputs = (
-        API_KEY_STATE.get("drive_output_folders", []) or []
-    )
+    configured_outputs = API_KEY_STATE.get(
+        "drive_output_folders",
+        [],
+    ) or []
 
     allowed_ids = {
-        normalize_drive_folder_id(str(item.get("id", "") or ""))
+        normalize_drive_folder_id(
+            str(item.get("id", "") or "")
+        )
         for item in configured_outputs
         if isinstance(item, dict) and item.get("id")
     }
@@ -2961,9 +2938,8 @@ async def canva_export_to_drive(
         raise HTTPException(
             status_code=400,
             detail=(
-                "The selected Google Drive output folder is not "
-                "currently configured. Refresh the Google Drive "
-                "folders and select an accessible folder."
+                "The selected Google Drive output folder was not "
+                "provided in the uploaded API key file."
             ),
         )
 
@@ -3051,41 +3027,22 @@ async def canva_export_to_drive(
     # STEP 3: Find/create outputs folder
     # ------------------------------------------------------------
     try:
-        print("STEP 3: Resolving outputs folder...")
+        print("STEP 3: Resolving configured output folder...")
 
-        resolved_parent_id, resolved_parent_name = (
-            resolve_configured_drive_folder(
-                service,
-                requested_folder_id,
-                configured_outputs,
-                label="Google Drive output folder",
-            )
-        )
+        # The selected folder is already the dedicated output folder.
+        # Never create an additional `outputs` child folder here.
+        outputs_folder_id = requested_folder_id
 
-        for item in configured_outputs:
-            if not isinstance(item, dict):
-                continue
-            if normalize_drive_folder_id(
-                str(item.get("id", "") or "")
-            ) == requested_folder_id:
-                item["id"] = resolved_parent_id
-                item["name"] = resolved_parent_name
-
-        outputs_folder_id = ensure_drive_outputs_folder(
-            service,
-            resolved_parent_id,
-            resolved_parent_name,
-        )
-
-        API_KEY_STATE["drive_folder_id"] = resolved_parent_id
-        API_KEY_STATE["drive_folder_name"] = resolved_parent_name
-        API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
-        API_KEY_STATE["drive_output_folder_name"] = "outputs"
-        persist_drive_configuration()
-
-        if not outputs_folder_id:
+        metadata = service.files().get(
+            fileId=outputs_folder_id,
+            fields="id,name,mimeType,trashed",
+        ).execute()
+        if (
+            metadata.get("mimeType") != "application/vnd.google-apps.folder"
+            or metadata.get("trashed")
+        ):
             raise RuntimeError(
-                "The outputs folder ID could not be resolved."
+                "The selected Google Drive output folder is not an active folder."
             )
 
         print(
@@ -3786,32 +3743,105 @@ def tag_all_input_files():
 # PDF / PPT / PPTX document references
 # -------------------------------------------------------------------
 
-def _resolve_document_reference(source_type: str, source: str, filename: str) -> tuple[Path, str]:
-    import uuid
+def _resolve_document_reference(
+    source_type: str,
+    source: str,
+    filename: str,
+    content_type: str = "",
+) -> tuple[Path, str]:
+    """Resolve an uploaded/Drive PDF, PPT, or PPTX robustly.
 
+    The browser may know the document MIME type even when an older frontend
+    build sends a filename without an extension. Prefer the real upload
+    filename, but also infer the extension from MIME type and search the
+    manual-upload directory when necessary.
+    """
     source_type = str(source_type or "").strip().lower()
-    filename = Path(filename or "reference.pdf").name
+    source_name = Path(str(source or "")).name
+    filename = Path(filename or source_name or "reference.pdf").name
+    mime_type = str(content_type or "").strip().lower()
+
+    mime_to_extension = {
+        "application/pdf": ".pdf",
+        "application/vnd.ms-powerpoint": ".ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    }
+
     extension = Path(filename).suffix.lower()
-    if not is_supported_document(extension):
-        raise HTTPException(status_code=400, detail="Only PDF, PPT, and PPTX references are supported in document mode.")
+    supported_document_extensions = {".pdf", ".ppt", ".pptx"}
+    if extension not in supported_document_extensions:
+        source_extension = Path(source_name).suffix.lower()
+        if source_extension in supported_document_extensions:
+            extension = source_extension
+        elif mime_to_extension.get(mime_type):
+            extension = mime_to_extension[mime_type]
+            filename = f"{Path(filename).stem}{extension}"
+
+    if extension not in supported_document_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only PDF, PPT, and PPTX references are supported in document mode. "
+                f"Received filename '{filename}' with MIME type '{content_type or 'unknown'}'."
+            ),
+        )
 
     if source_type == "input-folder":
-        path = INPUT_DIR / Path(source).name
+        path = INPUT_DIR / Path(source_name or filename).name
+
     elif source_type == "upload":
-        path = MANUAL_UPLOADS_DIR / Path(source).name
+        # Normal path: source is the original uploaded filename.
+        candidates = [
+            MANUAL_UPLOADS_DIR / Path(source_name or filename).name,
+            MANUAL_UPLOADS_DIR / filename,
+        ]
+        path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+
+        # Compatibility with older frontend builds that sent an upload id
+        # instead of the stored filename. If that happens, find the matching
+        # document by filename stem/extension.
+        if not path.is_file():
+            requested_stem = Path(filename).stem.lower()
+            requested_extension = extension.lower()
+            for candidate in MANUAL_UPLOADS_DIR.iterdir():
+                if not candidate.is_file():
+                    continue
+                if candidate.suffix.lower() != requested_extension:
+                    continue
+                if candidate.stem.lower() == requested_stem:
+                    path = candidate
+                    break
+
     elif source_type == "google-drive":
         require_drive_configuration()
         service = get_drive_service()
         path = UPLOADS_DIR / f"drive_document_{source}_{filename}"
         if path.exists():
-            try: path.unlink()
-            except OSError: pass
+            try:
+                path.unlink()
+            except OSError:
+                pass
         download_drive_file(service, source, path)
+
     else:
-        raise HTTPException(status_code=400, detail="Document references must come from an upload, input folder, or Google Drive.")
+        raise HTTPException(
+            status_code=400,
+            detail="Document references must come from an upload, input folder, or Google Drive.",
+        )
 
     if not path.exists() or not path.is_file() or path.stat().st_size == 0:
-        raise HTTPException(status_code=400, detail="The selected document reference is empty or unavailable.")
+        raise HTTPException(
+            status_code=400,
+            detail="The selected document reference is empty or unavailable.",
+        )
+
+    actual_extension = path.suffix.lower()
+    if actual_extension not in supported_document_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail="The resolved reference is not a supported PDF, PPT, or PPTX document.",
+        )
+
     return path, document_mime_type(path)
 
 
@@ -3827,7 +3857,12 @@ async def canva_create_from_reference_document(
     Canva's Design Import API keeps the document structure editable where Canva
     can preserve it. No public URL, Cloudflare, ngrok, or temporary file host is used.
     """
-    local_path, mime_type = _resolve_document_reference(source_type, source, filename)
+    local_path, mime_type = _resolve_document_reference(
+        source_type,
+        source,
+        filename,
+        content_type,
+    )
     try:
         result = await canva_connect_service.import_design_from_local_file(local_path)
         result["source_filename"] = local_path.name
@@ -4171,6 +4206,86 @@ def _openrouter_image(
 
     raise RuntimeError("OpenRouter returned no image data.")
 
+
+def _create_editable_template_from_generated_image(
+    image_path: Path,
+    prompt: str,
+) -> dict:
+    """Analyze the newly generated image and create an editable PPTX template.
+
+    The PNG/JPG remains the visual output. A second AI/text-vision pass analyzes
+    that exact generated image, writes a template JSON artifact, and converts
+    the template into a PPTX whose supported elements can be edited in Canva.
+    """
+    text_candidates = _selected_stage_candidates("text")
+    if not text_candidates:
+        raise RuntimeError(
+            "The image was generated, but no selected text/vision-capable API key "
+            "is available to create its editable template."
+        )
+
+    errors: list[str] = []
+    template_result: dict | None = None
+    template_pipeline_item: dict | None = None
+
+    for candidate_id, candidate_item in text_candidates:
+        try:
+            template_result = _pipeline_template(
+                candidate_item,
+                reference_path=image_path,
+            )
+            template_pipeline_item = candidate_item
+            API_KEY_STATE["pipeline_key_id"] = candidate_id
+            break
+        except Exception as exc:
+            provider_name = str(candidate_item.get("display_name") or candidate_id)
+            errors.append(f"{provider_name}: {exc}")
+
+    if template_result is None:
+        raise RuntimeError(
+            "Unable to create an editable template from the generated image. "
+            + " | ".join(errors)
+        )
+
+    template = template_result.get("template")
+    if not isinstance(template, dict):
+        raise RuntimeError("The AI template generator returned no valid template object.")
+
+    template["source"] = {
+        "type": "generated-image",
+        "filename": image_path.name,
+        "prompt": prompt,
+    }
+
+    template_id = str(template.get("template_id") or "")
+    if not template_id:
+        import uuid
+        template_id = uuid.uuid4().hex
+        template["template_id"] = template_id
+
+    json_path = EDITABLE_DESIGNS_DIR / f"{template_id}.json"
+    json_path.write_text(
+        json.dumps(template, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    pptx_path = EDITABLE_DESIGNS_DIR / f"{template_id}.pptx"
+    build_editable_pptx(
+        template=template,
+        source_image=image_path,
+        output_path=pptx_path,
+    )
+
+    metadata = _pipeline_metadata(template_pipeline_item or {}, "text")
+    return {
+        "template_id": template_id,
+        "template_filename": json_path.name,
+        "editable_design_filename": pptx_path.name,
+        "editable_design_mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "template": template,
+        **metadata,
+    }
+
 @app.post("/api/images/generate")
 async def generate_output_image(
     source_type: str = Form(...),
@@ -4291,7 +4406,27 @@ async def generate_output_image(
         )
 
     output_name = _safe_output_name(filename)
-    (IMAGE_OUTPUT_DIR / output_name).write_bytes(image_bytes)
+    generated_image_path = IMAGE_OUTPUT_DIR / output_name
+    generated_image_path.write_bytes(image_bytes)
+
+    # The PNG/JPG is still the normal generated output. In addition, build a
+    # structured PPTX representation so Canva can import native text/shape
+    # elements without using Magic Layers. If template extraction fails, the
+    # image generation request fails explicitly rather than creating a Canva
+    # button that can never produce an editable design.
+    try:
+        editable_template = _create_editable_template_from_generated_image(
+            generated_image_path,
+            prompt,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Image generation succeeded, but editable template generation "
+                f"failed: {exc}"
+            ),
+        ) from exc
 
     return {
         "success": True,
@@ -4303,7 +4438,44 @@ async def generate_output_image(
         "pipeline_api_id": key_id,
         "selected_api_count": len(API_KEY_STATE.get("selected_ids", [])),
         "changes": {},
+        "editable_template": editable_template,
     }
+
+
+@app.post("/api/canva/create-from-generated-template")
+async def canva_create_from_generated_template(
+    filename: str = Form(...),
+):
+    """Import the AI-generated editable PPTX directly into Canva.
+
+    This endpoint intentionally imports PPTX instead of sending the generated
+    PNG through Canva's image-to-design/Magic Layers flow.
+    """
+    safe_name = Path(filename).name
+    if not safe_name or Path(safe_name).suffix.lower() != ".pptx":
+        raise HTTPException(
+            status_code=400,
+            detail="An editable PPTX template filename is required.",
+        )
+
+    local_path = EDITABLE_DESIGNS_DIR / safe_name
+    if not local_path.exists() or not local_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="The generated editable PPTX template was not found on the server.",
+        )
+
+    try:
+        result = await canva_connect_service.import_design_from_local_file(local_path)
+        result["editable_source"] = "ai-generated-pptx-template"
+        result["magic_layers_required"] = False
+        result["source_file"] = safe_name
+        return result
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to import the generated editable template into Canva: {exc}",
+        ) from exc
 
 
 @app.get("/api/images/output/{filename}")
@@ -4315,293 +4487,151 @@ def get_generated_image(filename: str):
 
 @app.get("/api/drive/folders")
 def get_configured_drive_folders():
-    """
-    Return only Drive folders accessible by the current OAuth account.
-    Stale IDs can be recovered by exact configured folder name.
-    """
+    """Return the dedicated output folders supplied by the uploaded API/config file."""
     folders = API_KEY_STATE.get("drive_output_folders", [])
-
     if not isinstance(folders, list) or not folders:
         load_persisted_drive_configuration()
         folders = API_KEY_STATE.get("drive_output_folders", [])
 
-    if not isinstance(folders, list):
-        folders = []
-
     result = []
-
     try:
         service = get_drive_service()
-
         for index, folder in enumerate(folders, start=1):
             if not isinstance(folder, dict):
                 continue
-
-            folder_id = normalize_drive_folder_id(
-                str(folder.get("id", "") or "")
-            )
-            folder_name = str(
-                folder.get("name", "") or ""
-            ).strip()
-
+            folder_id = normalize_drive_folder_id(str(folder.get("id", "") or ""))
+            folder_name = str(folder.get("name", "") or "").strip()
             if not folder_id and not folder_name:
                 continue
-
             try:
-                resolved_id = resolve_drive_folder_id(
-                    service,
-                    folder_id,
-                    folder_name,
-                )
-                metadata = _drive_folder_metadata(
-                    service,
-                    resolved_id,
-                )
-
-                resolved_name = str(
-                    metadata.get("name")
-                    or folder_name
-                    or f"Google Drive Output {index}"
-                ).strip()
-
-                folder["id"] = resolved_id
-                folder["name"] = resolved_name
-
-                result.append(
-                    {
-                        "id": resolved_id,
-                        "name": resolved_name,
-                        "label": resolved_name
-                        or f"Google Drive Output {index}",
-                    }
-                )
-
+                resolved_id = resolve_drive_folder_id(service, folder_id, folder_name)
+                metadata = service.files().get(
+                    fileId=resolved_id,
+                    fields="id,name,mimeType,trashed",
+                ).execute()
+                if metadata.get("mimeType") != "application/vnd.google-apps.folder" or metadata.get("trashed"):
+                    raise RuntimeError("Configured ID is not an active Google Drive folder.")
+                folder_id = str(metadata.get("id", resolved_id))
+                folder_name = str(metadata.get("name", folder_name or f"Google Drive {index}"))
             except Exception as exc:
-                print(
-                    f"Skipping inaccessible configured Drive folder "
-                    f"{folder_id or folder_name}: {exc}"
-                )
-
-        API_KEY_STATE["drive_output_folders"] = [
-            {"id": item["id"], "name": item["name"]}
-            for item in result
-        ]
-
-        if result:
-            API_KEY_STATE["drive_folder_id"] = result[0]["id"]
-            API_KEY_STATE["drive_folder_name"] = result[0]["name"]
-
-        persist_drive_configuration()
-
-    except HTTPException:
-        raise
+                # Keep the configured ID visible even if metadata lookup fails;
+                # the save endpoint will provide the actionable Drive error.
+                print(f"Unable to resolve configured output folder {folder_id or folder_name}: {exc}")
+                folder_name = folder_name or f"Google Drive Output {index}"
+            result.append({
+                "id": folder_id,
+                "name": folder_name,
+                "label": folder_name or f"Google Drive Output {index}",
+            })
     except Exception as exc:
-        import traceback
-        print()
-        print("=" * 80)
-        print("GOOGLE DRIVE FOLDER LIST FAILED")
-        print("=" * 80)
-        traceback.print_exc()
-        print("=" * 80)
-        print()
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Unable to load configured Google Drive output folders: "
-                f"{type(exc).__name__}: {exc}"
-            ),
+            detail=f"Unable to load configured Google Drive output folders: {exc}",
         ) from exc
 
     return {"folders": result}
 
 
 @app.post("/api/images/save-to-drive")
-def save_generated_image_to_drive(
-    filename: str = Form(...),
-    folder_id: str = Form(""),
-):
-    """
-    Save a generated local image into the outputs folder.
-
-    The selected parent folder is validated against the currently
-    authorized Google account before outputs is accessed.
-    """
+def save_generated_image_to_drive(filename: str = Form(...), folder_id: str = Form("")):
+    """Save a generated local image directly into the selected dedicated Google Drive output folder."""
     require_drive_configuration()
-
     safe_name = Path(filename).name
     if not safe_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Generated image filename is required.",
-        )
+        raise HTTPException(status_code=400, detail="Generated image filename is required.")
 
     local_path = IMAGE_OUTPUT_DIR / safe_name
     if not local_path.exists() or not local_path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail="Generated image was not found on the server.",
-        )
+        raise HTTPException(status_code=404, detail="Generated image was not found on the server.")
 
     try:
         service = get_drive_service()
         requested_folder_id = normalize_drive_folder_id(folder_id)
-
-        if not requested_folder_id:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Select one of the configured Google Drive output "
-                    "folders before saving."
-                ),
-            )
-
-        configured_outputs = (
-            API_KEY_STATE.get("drive_output_folders", []) or []
-        )
-
+        configured_outputs = API_KEY_STATE.get("drive_output_folders", []) or []
         allowed_ids = {
             normalize_drive_folder_id(str(item.get("id", "") or ""))
             for item in configured_outputs
             if isinstance(item, dict) and item.get("id")
         }
-
+        if not requested_folder_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Select one of the configured Google Drive output folders before saving.",
+            )
         if requested_folder_id not in allowed_ids:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "The selected Google Drive output folder is not "
-                    "currently configured. Refresh the Google Drive "
-                    "folders and select an accessible folder."
-                ),
+                detail="The selected Google Drive output folder was not provided in the uploaded API key file.",
+            )
+        # The requested folder is already the dedicated output folder.
+        # Do not create an `outputs` child folder under it.
+        outputs_folder_id = requested_folder_id
+
+        metadata = service.files().get(
+            fileId=outputs_folder_id,
+            fields="id,name,mimeType,trashed",
+        ).execute()
+        if (
+            metadata.get("mimeType") != "application/vnd.google-apps.folder"
+            or metadata.get("trashed")
+        ):
+            raise RuntimeError(
+                "The selected Google Drive output folder is not an active folder."
             )
 
-        resolved_parent_id, resolved_parent_name = (
-            resolve_configured_drive_folder(
-                service,
-                requested_folder_id,
-                configured_outputs,
-                label="Google Drive output folder",
-            )
-        )
-
-        outputs_folder_id = ensure_drive_outputs_folder(
-            service,
-            resolved_parent_id,
-            resolved_parent_name,
-        )
-
-        API_KEY_STATE["drive_folder_id"] = resolved_parent_id
-        API_KEY_STATE["drive_folder_name"] = resolved_parent_name
         API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
-        API_KEY_STATE["drive_output_folder_name"] = "outputs"
-
-        # Replace a stale configured ID with the current account's ID.
-        for item in configured_outputs:
-            if not isinstance(item, dict):
-                continue
-            if normalize_drive_folder_id(
-                str(item.get("id", "") or "")
-            ) == requested_folder_id:
-                item["id"] = resolved_parent_id
-                item["name"] = resolved_parent_name
-
+        API_KEY_STATE["drive_output_folder_name"] = str(
+            metadata.get("name") or "Google Drive Output"
+        ).strip()
         persist_drive_configuration()
 
-        escaped_name = safe_name.replace(
-            chr(39),
-            chr(92) + chr(39),
-        )
-
-        existing = (
-            service.files()
-            .list(
-                q=(
-                    f"'{outputs_folder_id}' in parents "
-                    f"and name = '{escaped_name}' "
-                    "and trashed = false"
-                ),
-                pageSize=10,
-                fields="files(id,name,webViewLink)",
-            )
-            .execute()
-            .get("files", [])
-        )
-
-        image_bytes = local_path.read_bytes()
-        if not image_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail="The generated image file is empty.",
-            )
+        # Avoid creating duplicate files with the same name on repeated clicks.
+        existing = service.files().list(
+            q=(
+                f"'{outputs_folder_id}' in parents "
+                f"and name = '{safe_name.replace(chr(39), chr(92)+chr(39))}' "
+                "and trashed = false"
+            ),
+            pageSize=10,
+            fields="files(id,name,webViewLink)",
+        ).execute().get("files", [])
 
         media = MediaIoBaseUpload(
-            io.BytesIO(image_bytes),
+            io.BytesIO(local_path.read_bytes()),
             mimetype="image/png",
             resumable=False,
         )
 
         if existing:
-            drive_file = (
-                service.files()
-                .update(
-                    fileId=existing[0]["id"],
-                    media_body=media,
-                    fields="id,name,webViewLink",
-                )
-                .execute()
-            )
+            drive_file = service.files().update(
+                fileId=existing[0]["id"],
+                media_body=media,
+                fields="id,name,webViewLink",
+            ).execute()
         else:
-            drive_file = (
-                service.files()
-                .create(
-                    body={
-                        "name": safe_name,
-                        "parents": [outputs_folder_id],
-                    },
-                    media_body=media,
-                    fields="id,name,webViewLink",
-                )
-                .execute()
-            )
+            drive_file = service.files().create(
+                body={"name": safe_name, "parents": [outputs_folder_id]},
+                media_body=media,
+                fields="id,name,webViewLink",
+            ).execute()
 
         return {
             "success": True,
             "filename": safe_name,
             "drive_file_id": drive_file.get("id", ""),
             "drive_folder": "outputs",
-            "parent_folder_id": resolved_parent_id,
+            "parent_folder_id": parent_folder_id,
             "drive_url": drive_file.get("webViewLink", ""),
-            "message": (
-                "Generated image saved to the selected "
-                "Google Drive/outputs folder."
-            ),
+            "message": "Generated image saved to the selected Google Drive/outputs folder.",
         }
-
     except HTTPException:
         raise
     except Exception as exc:
-        import traceback
-        print()
-        print("=" * 80)
-        print("SAVE TO GOOGLE DRIVE: ERROR")
-        print("=" * 80)
-        print(f"Error type    : {type(exc).__name__}")
-        print(f"Error message : {exc}")
-        print(f"Filename      : {safe_name}")
-        print(f"Folder ID     : {folder_id}")
-        traceback.print_exc()
-        print("=" * 80)
-        print()
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Unable to save generated image to Google Drive: "
-                f"{type(exc).__name__}: {exc}"
-            ),
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"Unable to save generated image to Google Drive: {exc}") from exc
 
 
+# Generate AI prompt from reference
+# -------------------------------------------------------------------
 
 @app.post(
     "/api/prompts/generate"
@@ -5240,7 +5270,6 @@ app = CORSMiddleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://prolific-creation-production-e2f7.up.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
