@@ -12,7 +12,6 @@ import type {
 
 import "./App.css";
 
-import { generateTemplate } from "./services/templateService";
 import type {
   GenerateTemplateResponse,
 } from "./services/templateService";
@@ -164,40 +163,6 @@ function isImageUrl(url: string): boolean {
     );
   } catch {
     return false;
-  }
-}
-
-
-function formatReferenceType(
-  type: ReferenceType,
-): string {
-  switch (type) {
-    case "image":
-      return "Image";
-
-    case "gif":
-      return "GIF";
-
-    case "pdf":
-      return "PDF";
-
-    case "ppt":
-      return "PowerPoint";
-
-    case "pptx":
-      return "PowerPoint";
-
-    case "video":
-      return "Video";
-
-    case "youtube":
-      return "YouTube";
-
-    case "image-link":
-      return "Image Link";
-
-    default:
-      return "Reference";
   }
 }
 
@@ -1475,7 +1440,6 @@ function getApiServiceIcon(
 
 function ImageGenerator({
   selectedApiKeys,
-  selectedApiServices,
   availableApiServices,
   onApiSelectionChange,
   onBackToApiSetup,
@@ -1512,24 +1476,15 @@ function ImageGenerator({
       "manual",
     );
 
-  const [isGeneratingPrompt, setIsGeneratingPrompt] =
-    useState(false);
-
   const [templateResult, setTemplateResult] =
     useState<GenerateTemplateResponse | null>(
       null,
     );
 
-  const [templateApiProvider, setTemplateApiProvider] =
+  const [promptApiProvider] =
     useState("");
 
-  const [templateApiModel, setTemplateApiModel] =
-    useState("");
-
-  const [promptApiProvider, setPromptApiProvider] =
-    useState("");
-
-  const [promptApiModel, setPromptApiModel] =
+  const [promptApiModel] =
     useState("");
 
   const [generatedImageUrl, setGeneratedImageUrl] =
@@ -1582,8 +1537,7 @@ function ImageGenerator({
   const [isTaggingImages, setIsTaggingImages] =
     useState(false);
 
-  const [isGeneratingTemplate, setIsGeneratingTemplate] =
-    useState(false);
+  const isGeneratingTemplate = false;
 
   const [previewUrls, setPreviewUrls] =
     useState<Record<string, string>>({});
@@ -2309,8 +2263,6 @@ function ImageGenerator({
     // Template generation is disabled. Selected references are passed
     // directly to image generation and addressed by their numbers.
     setTemplateResult(null);
-    setTemplateApiProvider("");
-    setTemplateApiModel("");
   }
 
 
@@ -2845,190 +2797,9 @@ function ImageGenerator({
 
 
   /*
-   * ------------------------------------------------------------
-   * Remove reference
-   * ------------------------------------------------------------
+   * Template generation is intentionally disabled in the current image
+   * generation flow. The template state is retained for the existing UI.
    */
-
-  function handleRemoveReference() {
-
-    if (
-      reference?.source ===
-        "upload" &&
-      reference.url.startsWith(
-        "blob:",
-      )
-    ) {
-
-      URL.revokeObjectURL(
-        reference.url,
-      );
-    }
-
-
-    setReference(
-      null,
-    );
-
-    setSelectedInputIds([]);
-
-    setTemplatePrompt(
-      "",
-    );
-
-    setPromptMode(
-      "manual",
-    );
-
-    setTemplateResult(
-      null,
-    );
-
-    setGeneratedImageUrl("");
-    setGeneratedImageFilename("");
-    setGeneratedImageModel("");
-
-    setError("");
-  }
-
-
-  /*
-   * ------------------------------------------------------------
-   * Automatic template generation
-   * ------------------------------------------------------------
-   */
-
-  async function generateTemplateForReference(
-    currentReference: ReferenceData,
-  ) {
-
-    if (selectedApiKeys.length === 0) {
-      setTemplateResult(null);
-      setTemplateApiProvider("");
-      setTemplateApiModel("");
-      return;
-    }
-
-    if (
-      currentReference.type ===
-        "pdf" ||
-      currentReference.type ===
-        "video"
-    ) {
-
-      setTemplateResult(
-        null,
-      );
-
-
-      setError(
-        "Template generation currently supports images, GIFs and YouTube references.",
-      );
-
-
-      return;
-    }
-
-
-    setError("");
-
-    setIsGeneratingTemplate(
-      true,
-    );
-
-    setTemplateResult(
-      null,
-    );
-    setTemplateApiProvider("");
-    setTemplateApiModel("");
-
-
-    try {
-
-      const result =
-        await generateTemplate({
-          type:
-            currentReference.type,
-
-          name:
-            currentReference.name,
-
-          /*
-           * `url` is only the browser preview URL.
-           * `sourceId` is the value the backend uses to locate the
-           * actual reference.
-           */
-          url:
-            currentReference.url,
-
-          source:
-            currentReference.source as any,
-
-          sourceId:
-            currentReference.sourceId,
-
-          mimeType:
-            currentReference.mimeType,
-        });
-
-
-      setTemplateResult(
-        result,
-      );
-
-      const templateMetadata = result as GenerateTemplateResponse & {
-        provider?: string;
-        model?: string;
-      };
-      setTemplateApiProvider(String(templateMetadata.provider || ""));
-      setTemplateApiModel(String(templateMetadata.model || ""));
-
-    } catch (err) {
-
-      console.error(
-        "Automatic template generation failed:",
-        err,
-      );
-
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to generate template from the reference.",
-      );
-
-    } finally {
-
-      setIsGeneratingTemplate(
-        false,
-      );
-    }
-  }
-
-
-  /*
-   * ------------------------------------------------------------
-   * Template generation temporarily disabled
-   * ------------------------------------------------------------
-   * Keep the existing template state/functions in place so the feature
-   * can be re-enabled later, but do not invoke the template-generation
-   * pipeline anywhere in the current flow.
-   */
-
-
-  /*
-   * ------------------------------------------------------------
-   * Generate AI prompt
-   * ------------------------------------------------------------
-   */
-
-  function handleGeneratePrompt() {
-    setIsGeneratingPrompt(false);
-    setPromptMode("manual");
-    setPromptApiProvider("");
-    setPromptApiModel("");
-    setError("AI prompt generation is temporarily disabled. Enter the content prompt manually.");
-  }
 
   /*
    * ------------------------------------------------------------
@@ -5443,89 +5214,6 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 
             </div>
 
-
-            {false && templateResult && (
-              <div className="generated-output-meta" style={{ marginTop: "16px" }}>
-                <span>API Provider</span>
-                <strong>{templateApiProvider || "Selected API"}</strong>
-                <span>Model</span>
-                <strong>{templateApiModel || "Provider model"}</strong>
-              </div>
-            )}
-
-
-            {false && templateResult && (
-              <div className="template-editable-section">
-
-                <div className="template-structure-heading">
-                  <div>
-                    <span className="template-section-number">
-                      04
-                    </span>
-                    <strong>
-                      Editable Text Groups
-                    </strong>
-                  </div>
-
-                  <span>
-                    Existing text regions that can be replaced
-                  </span>
-                </div>
-
-                {templateResult.template.text_groups &&
-                templateResult.template.text_groups.length > 0 ? (
-                  <div className="editable-text-list">
-                    {(Array.isArray(templateResult.template.text_groups) ? templateResult.template.text_groups : []).map((group) => (
-                      <div
-                        key={group.id}
-                        className="editable-text-item"
-                      >
-                        <div
-                          className="editable-text-swatch"
-                          style={{
-                            backgroundColor:
-                              group.lines?.[0]?.color ||
-                              "#FFFFFF",
-                          }}
-                        />
-                        <div className="editable-text-copy">
-                          <strong>{group.text}</strong>
-                          <span>
-                            {group.role} · {group.line_count} line{group.line_count === 1 ? "" : "s"}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : templateResult.template.text_elements &&
-                  templateResult.template.text_elements.length > 0 ? (
-                  <div className="editable-text-list">
-                    {(Array.isArray(templateResult.template.text_elements) ? templateResult.template.text_elements : []).map((element) => (
-                      <div
-                        key={element.id}
-                        className="editable-text-item"
-                      >
-                        <div
-                          className="editable-text-swatch"
-                          style={{ backgroundColor: element.color }}
-                        />
-                        <div className="editable-text-copy">
-                          <strong>{element.text}</strong>
-                          <span>
-                            {element.id} · {element.width} × {element.height}px
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="editable-text-empty">
-                    No editable text regions were detected. Make sure Gemini is configured and regenerate the template.
-                  </div>
-                )}
-
-              </div>
-            )}
 
 
             <div className="template-prompt-area">
