@@ -149,6 +149,22 @@ DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
 
 
 def initialize_drive_oauth_files() -> None:
+    print(
+    "Google Drive OAuth runtime check:",
+    {
+        "credentials_env_present": bool(
+            os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON_B64")
+        ),
+        "token_env_present": bool(
+            os.getenv("GOOGLE_DRIVE_TOKEN_JSON_B64")
+        ),
+        "credentials_file_exists": CREDENTIALS_FILE.exists(),
+        "token_file_exists": TOKEN_FILE.exists(),
+        "credentials_file": str(CREDENTIALS_FILE),
+        "token_file": str(TOKEN_FILE),
+    },
+    flush=True,
+)
     """Initialize Google Drive OAuth files from Railway environment variables.
 
     Local development keeps using the existing credentials.json/token.json
