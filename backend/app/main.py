@@ -4,6 +4,8 @@ import json
 import base64
 import os
 import re
+import pickle
+import zipfile
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from app.services.canva_mcp_service import canva_mcp_service
@@ -142,74 +144,139 @@ EDITABLE_DESIGNS_DIR.mkdir(
 # -------------------------------------------------------------------
 
 DRIVE_OAUTH_KEY_ID = "__GOOGLE_DRIVE_OAUTH__"
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+# These are the exact scopes used by the Tinitiate-provided OAuth client.
+# They are sufficient for reading Drive references and creating/updating files
+# through drive.file. Do not request the broader full-drive scope.
+DRIVE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+]
+
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
+TOKEN_PICKLE_FILE = BASE_DIR / "token.pickle"
 DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
 
 
-def initialize_drive_oauth_files() -> None:
-    print(
-    "Google Drive OAuth runtime check:",
-    {
-        "credentials_env_present": bool(
-            os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON_B64")
-        ),
-        "token_env_present": bool(
-            os.getenv("GOOGLE_DRIVE_TOKEN_JSON_B64")
-        ),
-        "credentials_file_exists": CREDENTIALS_FILE.exists(),
-        "token_file_exists": TOKEN_FILE.exists(),
-        "credentials_file": str(CREDENTIALS_FILE),
-        "token_file": str(TOKEN_FILE),
-    },
-    flush=True,
-)
-    """Initialize Google Drive OAuth files from Railway environment variables.
+def _extract_drive_oauth_zip(zip_path: Path) -> bool:
+    """Extract only OAuth files from a supplied googledrive ZIP.
 
-    Local development keeps using the existing credentials.json/token.json
-    files. Railway can provide the company user OAuth files as base64-encoded
-    JSON environment variables without committing secrets to the repository.
+    The ZIP may contain credentials.json and token.pickle (the company-provided
+    format). Other files such as images/scripts are deliberately ignored.
     """
+    if not zip_path.exists():
+        return False
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            names = {name.replace("\\", "/"): name for name in archive.namelist()}
+            credential_name = next((n for n in names if n.endswith("/credentials.json") or n == "credentials.json"), None)
+            pickle_name = next((n for n in names if n.endswith("/token.pickle") or n == "token.pickle"), None)
+            token_json_name = next((n for n in names if n.endswith("/token.json") or n == "token.json"), None)
+
+            if credential_name:
+                CREDENTIALS_FILE.write_bytes(archive.read(names[credential_name]))
+            if pickle_name:
+                TOKEN_PICKLE_FILE.write_bytes(archive.read(names[pickle_name]))
+            elif token_json_name:
+                TOKEN_FILE.write_bytes(archive.read(names[token_json_name]))
+            else:
+                return False
+
+            return CREDENTIALS_FILE.exists() and (TOKEN_PICKLE_FILE.exists() or TOKEN_FILE.exists())
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        raise RuntimeError(f"Failed to read Google Drive OAuth ZIP: {zip_path}") from exc
+
+
+def initialize_drive_oauth_files() -> None:
+    """Initialize Google Drive OAuth files for local and Railway use.
+
+    Supported configurations, in priority order:
+      1. GOOGLE_DRIVE_OAUTH_ZIP_B64: the provided googledrive ZIP containing
+         credentials.json + token.pickle.
+      2. GOOGLE_DRIVE_CREDENTIALS_JSON_B64 + GOOGLE_DRIVE_TOKEN_JSON_B64:
+         existing Railway JSON environment variables.
+      3. Existing local files in backend/ or a local googledrive folder.
+
+    No OAuth secret is hard-coded in source code.
+    """
+    zip_b64 = os.getenv("GOOGLE_DRIVE_OAUTH_ZIP_B64", "").strip()
     credentials_b64 = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON_B64", "").strip()
     token_b64 = os.getenv("GOOGLE_DRIVE_TOKEN_JSON_B64", "").strip()
 
-    # Local development: use the files already present in backend/.
-        # Local development: use the files already present in backend/.
-    if not credentials_b64 and not token_b64:
-        if os.getenv("RAILWAY_ENVIRONMENT"):
+    # If a complete OAuth ZIP is supplied, it is the source of truth.
+    if zip_b64:
+        try:
+            zip_bytes = base64.b64decode(zip_b64, validate=True)
+            temp_zip = BASE_DIR / ".googledrive_oauth.zip"
+            temp_zip.write_bytes(zip_bytes)
+            try:
+                if not _extract_drive_oauth_zip(temp_zip):
+                    raise ValueError("ZIP does not contain credentials.json and token.pickle/token.json.")
+            finally:
+                try:
+                    temp_zip.unlink()
+                except OSError:
+                    pass
+            return
+        except Exception as exc:
             raise RuntimeError(
-                "Google Drive OAuth environment variables are missing on Railway. "
-                "Configure GOOGLE_DRIVE_CREDENTIALS_JSON_B64 and "
-                "GOOGLE_DRIVE_TOKEN_JSON_B64 in the backend Railway service."
+                "Failed to initialize Google Drive OAuth files from GOOGLE_DRIVE_OAUTH_ZIP_B64."
+            ) from exc
+
+    # Existing separate Railway variables remain supported.
+    if credentials_b64 or token_b64:
+        if not credentials_b64 or not token_b64:
+            raise RuntimeError(
+                "Google Drive production OAuth configuration is incomplete. "
+                "Set GOOGLE_DRIVE_OAUTH_ZIP_B64, or configure both "
+                "GOOGLE_DRIVE_CREDENTIALS_JSON_B64 and GOOGLE_DRIVE_TOKEN_JSON_B64."
             )
+        try:
+            credentials_data = json.loads(
+                base64.b64decode(credentials_b64, validate=True).decode("utf-8")
+            )
+            token_data = json.loads(
+                base64.b64decode(token_b64, validate=True).decode("utf-8")
+            )
+            if not isinstance(credentials_data, dict):
+                raise ValueError("Google Drive credentials JSON must be an object.")
+            if not isinstance(token_data, dict):
+                raise ValueError("Google Drive token JSON must be an object.")
+
+            CREDENTIALS_FILE.write_text(json.dumps(credentials_data, indent=2), encoding="utf-8")
+            TOKEN_FILE.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
+            return
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to initialize Google Drive OAuth files from Railway environment variables."
+            ) from exc
+
+    # Local development: accept the company ZIP/folder without requiring the
+    # files to be copied into backend/. The provided ZIP is intentionally not
+    # searched outside these known project-adjacent locations.
+    local_candidates = [
+        BASE_DIR / "googledrive.zip",
+        BASE_DIR.parent / "googledrive.zip",
+        Path.home() / "Downloads" / "googledrive" / "googledrive.zip",
+        Path.home() / "Downloads" / "googledrive" / "googledrive" / "credentials.json",
+    ]
+    local_zip = next((p for p in local_candidates if p.suffix.lower() == ".zip" and p.exists()), None)
+    if local_zip:
+        _extract_drive_oauth_zip(local_zip)
         return
 
-    if not credentials_b64 or not token_b64:
-        raise RuntimeError(
-            "Google Drive production OAuth configuration is incomplete. "
-            "Both GOOGLE_DRIVE_CREDENTIALS_JSON_B64 and "
-            "GOOGLE_DRIVE_TOKEN_JSON_B64 must be configured."
-        )
-
-    try:
-        credentials_data = json.loads(
-            base64.b64decode(credentials_b64, validate=True).decode("utf-8")
-        )
-        token_data = json.loads(
-            base64.b64decode(token_b64, validate=True).decode("utf-8")
-        )
-        if not isinstance(credentials_data, dict):
-            raise ValueError("Google Drive credentials JSON must be an object.")
-        if not isinstance(token_data, dict):
-            raise ValueError("Google Drive token JSON must be an object.")
-
-        CREDENTIALS_FILE.write_text(json.dumps(credentials_data, indent=2), encoding="utf-8")
-        TOKEN_FILE.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
-    except Exception as exc:
-        raise RuntimeError(
-            "Failed to initialize Google Drive OAuth files from Railway environment variables."
-        ) from exc
+    # If the Downloads company folder exists, copy only the OAuth files.
+    company_dir = Path.home() / "Downloads" / "googledrive" / "googledrive"
+    company_credentials = company_dir / "credentials.json"
+    company_pickle = company_dir / "token.pickle"
+    company_json = company_dir / "token.json"
+    if company_credentials.exists():
+        CREDENTIALS_FILE.write_bytes(company_credentials.read_bytes())
+        if company_pickle.exists():
+            TOKEN_PICKLE_FILE.write_bytes(company_pickle.read_bytes())
+        elif company_json.exists():
+            TOKEN_FILE.write_bytes(company_json.read_bytes())
 
 
 initialize_drive_oauth_files()
@@ -430,7 +497,8 @@ def load_persisted_drive_configuration() -> None:
     Restore the non-secret Drive folder configuration at backend startup.
 
     This is intentionally independent of the API-key selection state.
-    Google Drive authentication continues to use credentials.json/token.json.
+    Google Drive authentication continues to use credentials.json plus token.pickle
+    (company format) or token.json.
     """
     if not DRIVE_CONFIG_FILE.exists():
         return
@@ -1278,6 +1346,11 @@ def drive_oauth_available() -> bool:
     return CREDENTIALS_FILE.exists()
 
 
+def drive_token_available() -> bool:
+    """Return True when either company token format is available."""
+    return TOKEN_PICKLE_FILE.exists() or TOKEN_FILE.exists()
+
+
 def drive_oauth_selected() -> bool:
     """
     Google Drive is available when its OAuth files and folder configuration
@@ -1286,7 +1359,7 @@ def drive_oauth_selected() -> bool:
     """
     return (
         CREDENTIALS_FILE.exists()
-        and TOKEN_FILE.exists()
+        and drive_token_available()
         and bool(
             normalize_drive_folder_id(
                 API_KEY_STATE.get("drive_folder_id", "")
@@ -1299,12 +1372,27 @@ def drive_oauth_selected() -> bool:
 def get_drive_service():
     if not CREDENTIALS_FILE.exists():
         raise RuntimeError(
-            "Google Drive OAuth credentials.json was not found in the backend folder."
+            "Google Drive OAuth credentials.json was not found. "
+            "Provide the company googledrive ZIP or credentials.json."
         )
 
     credentials = None
 
-    if TOKEN_FILE.exists():
+    # Prefer the company-provided token.pickle. It preserves the exact OAuth
+    # object/scopes produced by upload_to_drive.py. This avoids converting the
+    # company token into a different credential representation unnecessarily.
+    if TOKEN_PICKLE_FILE.exists():
+        try:
+            with TOKEN_PICKLE_FILE.open("rb") as token_file:
+                credentials = pickle.load(token_file)
+        except Exception as exc:
+            raise RuntimeError(
+                "The Google Drive token.pickle could not be loaded. "
+                "Use the token.pickle from the provided googledrive ZIP."
+            ) from exc
+
+    # JSON remains supported for existing Railway deployments.
+    if credentials is None and TOKEN_FILE.exists():
         try:
             credentials = Credentials.from_authorized_user_file(
                 str(TOKEN_FILE),
@@ -1313,34 +1401,37 @@ def get_drive_service():
         except Exception:
             credentials = None
 
-    if credentials and credentials.valid:
-        return build(
-            "drive",
-            "v3",
-            credentials=credentials,
+    if credentials is None:
+        raise RuntimeError(
+            "Google Drive is not authorized. No token.pickle or token.json was found."
         )
 
-    if credentials and credentials.expired and credentials.refresh_token:
+    if credentials.valid:
+        return build("drive", "v3", credentials=credentials)
+
+    if credentials.expired and credentials.refresh_token:
         try:
             credentials.refresh(GoogleAuthRequest())
-            TOKEN_FILE.write_text(
-                credentials.to_json(),
-                encoding="utf-8",
-            )
-            return build(
-                "drive",
-                "v3",
-                credentials=credentials,
-            )
+
+            # Preserve the original company credential format when possible.
+            if TOKEN_PICKLE_FILE.exists():
+                with TOKEN_PICKLE_FILE.open("wb") as token_file:
+                    pickle.dump(credentials, token_file)
+            else:
+                TOKEN_FILE.write_text(credentials.to_json(), encoding="utf-8")
+
+            return build("drive", "v3", credentials=credentials)
         except Exception as exc:
             raise RuntimeError(
-                "Google Drive authorization has expired and could not be refreshed. "
-                "Run 'python test_google_drive.py' once to authorize again."
+                "Google Drive authorization could not be refreshed. "
+                "The provided Tinitiate OAuth token.pickle may need to be "
+                "authorized again by its Google Cloud OAuth owner/test user. "
+                f"Original error: {exc}"
             ) from exc
 
     raise RuntimeError(
-        "Google Drive is not authorized yet. Run 'python test_google_drive.py' "
-        "once from the backend folder, then restart the backend."
+        "Google Drive authorization is unavailable. The supplied token has no "
+        "usable refresh token. Use the token.pickle from the provided googledrive ZIP."
     )
 
 
@@ -1386,11 +1477,12 @@ def require_drive_configuration():
             ),
         )
 
-    if not TOKEN_FILE.exists():
+    if not TOKEN_PICKLE_FILE.exists() and not TOKEN_FILE.exists():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Drive token.json was not found in the backend folder."
+                "Google Drive authorization token was not found. Expected token.pickle "
+                "from the provided googledrive credentials or token.json."
             ),
         )
 
@@ -2262,7 +2354,7 @@ def get_input_files() -> list[dict]:
     if (
         has_drive_configuration
         and CREDENTIALS_FILE.exists()
-        and TOKEN_FILE.exists()
+        and drive_token_available()
     ):
         try:
             service = get_drive_service()
@@ -3622,7 +3714,7 @@ def tag_all_input_files():
 
     if (
         drive_oauth_available()
-        and TOKEN_FILE.exists()
+        and drive_token_available()
         and (
             API_KEY_STATE.get("drive_folder_id")
             or API_KEY_STATE.get("drive_folder_name")
