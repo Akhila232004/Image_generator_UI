@@ -53,8 +53,9 @@ export interface GeneratedImageResponse {
 
   pipeline_api_id?: string;
 }
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+).replace(/\/+$/, "");
 
 
 type BackendSourceType =
