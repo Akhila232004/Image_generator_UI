@@ -38,3 +38,11 @@ backend/service-account.json
 Thumbs.db
 .DS_Store
 backend/uploads/
+
+# Google Drive authentication
+backend/token.pickle
+backend/token.json
+backend/credentials.json
+backend/service-account.json
+frontend/.env
+backend/.env
