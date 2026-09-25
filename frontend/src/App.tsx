@@ -184,9 +184,6 @@ function formatReferenceType(
 }
 
 
-// Kept for compatibility with existing reference-type UI helpers.
-void formatReferenceType;
-
 interface ApiKeyOption {
   id: string;
   name: string;
@@ -207,6 +204,7 @@ interface ApiKeySetupProps {
     selectedKeys: string[],
     selectedServices: SelectedApiService[],
   ) => void;
+  onBackToHome: () => void;
 }
 
 
@@ -369,6 +367,23 @@ function ApiKeySetup({
   }
 
 
+  function toggleApiKey(
+    keyId: string,
+  ) {
+    setSelectedKeys(
+      (current) =>
+        current.includes(keyId)
+          ? current.filter(
+              (id) =>
+                id !== keyId,
+            )
+          : [
+              ...current,
+              keyId,
+            ],
+    );
+  }
+
 
   function handleDownloadApiTemplate() {
     const templateBlob = new Blob([], {
@@ -392,13 +407,79 @@ function ApiKeySetup({
 
 
   async function handleContinue() {
-    if (!apiKeys.length) { setError("Upload an API key file before continuing."); return; }
-    setError(""); setIsSaving(true);
+    if (!selectedKeys.length) {
+      setError(
+        "Select at least one API before continuing.",
+      );
+
+      return;
+    }
+
+    setError("");
+    setIsSaving(true);
+
     try {
-      const services: SelectedApiService[] = apiKeys.map((api) => ({ id: api.id, name: api.name, keyName: api.keyName }));
-      onComplete([], services);
-    } finally { setIsSaving(false); }
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/api-keys/select`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              selected_ids:
+                selectedKeys,
+            }),
+          },
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to activate the selected APIs.",
+          ),
+        );
+      }
+
+      const selectedServices =
+        apiKeys.filter((api) =>
+          selectedKeys.includes(api.id),
+        ).map((api) => ({
+          id: api.id,
+          name: api.name,
+          keyName: api.keyName,
+        }));
+
+      onComplete(
+        selectedKeys,
+        selectedServices,
+      );
+
+    } catch (err) {
+      console.error(
+        "API selection failed:",
+        err,
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to activate the selected APIs.",
+      );
+
+    } finally {
+      setIsSaving(false);
+    }
   }
+
 
   return (
     <div className="api-setup-shell">
@@ -641,7 +722,11 @@ function ApiKeySetup({
 
               </div>
 
-
+              {apiKeys.length > 0 && (
+                <small>
+                  {selectedKeys.length} selected
+                </small>
+              )}
 
             </div>
 
@@ -688,8 +773,28 @@ function ApiKeySetup({
                 {apiKeys.map(
                   (api) => (
 
-                    <div key={api.id} className="api-key-option">
+                    <label
+                      key={api.id}
+                      className={`api-key-option ${
+                        selectedKeys.includes(
+                          api.id,
+                        )
+                          ? "selected"
+                          : ""
+                      }`}
+                    >
 
+                      <input
+                        type="checkbox"
+                        checked={selectedKeys.includes(
+                          api.id,
+                        )}
+                        onChange={() =>
+                          toggleApiKey(
+                            api.id,
+                          )
+                        }
+                      />
 
                       <span
                         className="api-key-service-icon"
@@ -722,7 +827,15 @@ function ApiKeySetup({
 
                       </span>
 
-                    </div>
+                      <span className="api-key-state">
+                        {selectedKeys.includes(
+                          api.id,
+                        )
+                          ? "Selected"
+                          : "Select"}
+                      </span>
+
+                    </label>
 
                   ),
                 )}
@@ -781,7 +894,7 @@ function ApiKeySetup({
           >
 
             {isSaving
-              ? "Opening Image Generator..."
+              ? "Activating..."
               : "Continue to Image Generator"}
 
             <span>
@@ -802,8 +915,6 @@ function ApiKeySetup({
 interface ImageGeneratorProps {
   selectedApiKeys: string[];
   selectedApiServices: SelectedApiService[];
-  availableApiServices: SelectedApiService[];
-  onApiSelectionChange: (keys: string[], services: SelectedApiService[]) => void;
   onBackToApiSetup: () => void;
 }
 
@@ -1342,13 +1453,8 @@ function getApiServiceIcon(
 function ImageGenerator({
   selectedApiKeys,
   selectedApiServices,
-  availableApiServices,
-  onApiSelectionChange,
-  onBackToApiSetup: _onBackToApiSetup,
+  onBackToApiSetup,
 }: ImageGeneratorProps) {
-
-  // Retained for compatibility with the API-selection/session flow.
-  void selectedApiServices;
 
 
   const [inputFiles, setInputFiles] =
@@ -1379,9 +1485,6 @@ function ImageGenerator({
 
   const [isGeneratingPrompt, setIsGeneratingPrompt] =
     useState(false);
-
-  // Prompt generation state is retained for the existing flow.
-  void isGeneratingPrompt;
 
   const [templateResult, setTemplateResult] =
     useState<GenerateTemplateResponse | null>(
@@ -1423,15 +1526,6 @@ function ImageGenerator({
 
   const [generatedTextChanges, setGeneratedTextChanges] =
     useState<Record<string, string>>({});
-
-  const [socialContent, setSocialContent] = useState<{
-    linkedin: { text: string; character_count: number; limit: number };
-    twitter: { text: string; character_count: number; limit: number };
-  } | null>(null);
-  const [isGeneratingSocialContent, setIsGeneratingSocialContent] = useState(false);
-  const [isSavingSocialContent, setIsSavingSocialContent] = useState(false);
-  const [socialContentMessage, setSocialContentMessage] = useState("");
-  const [showSocialPreview, setShowSocialPreview] = useState(false);
 
   const [isGeneratingImage, setIsGeneratingImage] =
     useState(false);
@@ -2992,9 +3086,6 @@ function ImageGenerator({
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
     setGeneratedTextChanges({});
-    setSocialContent(null);
-    setSocialContentMessage("");
-    setShowSocialPreview(false);
     setIsGeneratingImage(true);
 
 
@@ -3168,56 +3259,6 @@ function ImageGenerator({
   }
 
 
-  async function handleGenerateSocialContent() {
-    if (!generatedImageFilename) return;
-    if (!selectedApiKeys.length) { setError("Select at least one API key before generating social content."); return; }
-    setError(""); setSocialContentMessage(""); setIsGeneratingSocialContent(true);
-    try {
-      const formData = new FormData();
-      formData.append("filename", generatedImageFilename);
-      formData.append("prompt", templatePrompt.trim());
-      const response = await fetch(`${API_BASE_URL}/api/social-content/generate`, { method: "POST", body: formData });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(data?.detail || "Unable to generate social media descriptions."));
-      setSocialContent(data.content); setSocialContentMessage(`Generated using ${String(data.provider || "selected API")}.`);
-    } catch (error) { setSocialContent(null); setSocialContentMessage(error instanceof Error ? error.message : "Unable to generate social media descriptions."); }
-    finally { setIsGeneratingSocialContent(false); }
-  }
-
-  async function handleSaveSocialContent() {
-    if (!generatedImageFilename || !socialContent || isSavingSocialContent) return;
-    setIsSavingSocialContent(true); setSocialContentMessage("");
-    try {
-      const formData = new FormData();
-      formData.append("filename", generatedImageFilename);
-      formData.append("linkedin", socialContent.linkedin.text);
-      formData.append("twitter", socialContent.twitter.text);
-      const response = await fetch(`${API_BASE_URL}/api/social-content/save-to-drive`, { method: "POST", body: formData });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(data?.detail || "Unable to save the social media description."));
-      setSocialContentMessage(String(data?.message || "Social media description saved to Google Drive / outputs."));
-    } catch (error) { setSocialContentMessage(error instanceof Error ? error.message : "Unable to save the social media description."); }
-    finally { setIsSavingSocialContent(false); }
-  }
-
-  async function toggleImageGeneratorApiKey(api: SelectedApiService) {
-    const nextKeys = selectedApiKeys.includes(api.id) ? selectedApiKeys.filter((id) => id !== api.id) : [...selectedApiKeys, api.id];
-    const nextServices = availableApiServices.filter((service) => nextKeys.includes(service.id));
-    onApiSelectionChange(nextKeys, nextServices);
-    setSocialContent(null); setSocialContentMessage("");
-    if (!nextKeys.length) return;
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/api-keys/select`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selected_ids: nextKeys }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(data?.detail || "Unable to update API selection."));
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to update API selection.");
-    }
-  }
-
   /*
    * ------------------------------------------------------------
    * Reference preview
@@ -3368,12 +3409,6 @@ function ImageGenerator({
     }
   };
 
-  // These existing handlers are intentionally retained for compatibility
-  // with the reference/prompt flow even when the current UI path does not call them.
-  void handleRemoveReference;
-  void generateTemplateForReference;
-  void handleGeneratePrompt;
-
   return (
     <div className="app-shell">
 
@@ -3404,23 +3439,116 @@ function ImageGenerator({
 
         <div className="header-actions">
 
-          <div className="active-api-summary image-generator-api-selector" aria-label="Select API services for the pipeline">
-            {availableApiServices.length > 0 ? availableApiServices.map((service) => {
-              const selected = selectedApiKeys.includes(service.id);
-              return (
-                <button key={service.id} type="button" className={`active-api-service ${selected ? "selected" : ""}`} onClick={() => toggleImageGeneratorApiKey(service)} aria-pressed={selected}>
-                  <span aria-hidden="true">{getApiServiceIcon(service.name, service.keyName, 18)}</span>
-                  <span>{service.name}</span><span className="api-selection-check">{selected ? "✓" : "+"}</span>
-                </button>
-              );
-            }) : <span className="active-api-service">No API keys loaded</span>}
+          <div
+            className="active-api-summary"
+            aria-label="Selected API services"
+            title={`${selectedApiServices.length} API service${selectedApiServices.length === 1 ? "" : "s"} selected`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              flexWrap: "wrap",
+              maxWidth: "min(52vw, 560px)",
+              justifyContent: "flex-end",
+            }}
+          >
+            {selectedApiServices.length > 0 ? (
+              selectedApiServices.map((service) => (
+                <span
+                  key={service.id}
+                  className="active-api-service"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    padding: "6px 10px",
+                    borderRadius: "999px",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.055)",
+                    whiteSpace: "nowrap",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    lineHeight: 1,
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: "22px",
+                      height: "22px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: "50%",
+                      background: "rgba(255,255,255,0.10)",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                    }}
+                  >
+                    {getApiServiceIcon(service.name, service.keyName, 18)}
+                  </span>
+                  <span>{service.name}</span>
+                </span>
+              ))
+            ) : (
+              <span>
+                APIs 0
+              </span>
+            )}
           </div>
+
+
+          <button
+            type="button"
+            className="header-button"
+            onClick={onBackToApiSetup}
+          >
+            ← API Setup
+          </button>
+
+          <button
+            type="button"
+            className="header-button"
+          >
+            Documentation
+          </button>
+
+
+          <button
+            type="button"
+            className="settings-button"
+            aria-label="Settings"
+          >
+            ⚙
+          </button>
 
         </div>
 
       </header>
 
-      <main>
+
+      <main className="main-content">
+
+
+        <section className="hero-section">
+
+          <div>
+
+            <h1>
+              Transform references into
+              reusable visual content.
+            </h1>
+
+            <p>
+              Select a reference, define the
+              template, and prepare it for
+              image generation.
+            </p>
+
+          </div>
+
+        </section>
+
 
         <section className="workflow-section">
 
@@ -4541,10 +4669,10 @@ function ImageGenerator({
                   </span>
                 </div>
 
-                {templateResult?.template?.text_groups &&
+                {templateResult.template.text_groups &&
                 templateResult.template.text_groups.length > 0 ? (
                   <div className="editable-text-list">
-                    {(Array.isArray(templateResult?.template?.text_groups) ? templateResult.template.text_groups : []).map((group) => (
+                    {(Array.isArray(templateResult.template.text_groups) ? templateResult.template.text_groups : []).map((group) => (
                       <div
                         key={group.id}
                         className="editable-text-item"
@@ -4566,10 +4694,10 @@ function ImageGenerator({
                       </div>
                     ))}
                   </div>
-                ) : templateResult?.template?.text_elements &&
+                ) : templateResult.template.text_elements &&
                   templateResult.template.text_elements.length > 0 ? (
                   <div className="editable-text-list">
-                    {(Array.isArray(templateResult?.template?.text_elements) ? templateResult.template.text_elements : []).map((element) => (
+                    {(Array.isArray(templateResult.template.text_elements) ? templateResult.template.text_elements : []).map((element) => (
                       <div
                         key={element.id}
                         className="editable-text-item"
@@ -5063,22 +5191,11 @@ function ImageGenerator({
                       : "Save to Google Drive"}
                 </button>
 
-                {generatedImageSaveMessage && <p style={{ marginTop: 8 }}>{generatedImageSaveMessage}</p>}
-
-                <div className="social-content-panel">
-                  <div className="social-content-heading">
-                    <div><span className="social-content-kicker">SOCIAL CONTENT</span><h3>Generate Social Media Description</h3><p>Create platform-specific copy from the final generated image.</p></div>
-                    <button type="button" className="primary-button social-generate-button" onClick={handleGenerateSocialContent} disabled={isGeneratingSocialContent || !selectedApiKeys.length}>{isGeneratingSocialContent ? "Generating Description..." : "Generate Description"}</button>
-                  </div>
-                  {socialContent && <div className="social-content-actions"><button type="button" className="secondary-button" onClick={() => setShowSocialPreview((value) => !value)}>{showSocialPreview ? "Hide Preview" : "Preview Description"}</button><button type="button" className="primary-button" onClick={handleSaveSocialContent} disabled={isSavingSocialContent}>{isSavingSocialContent ? "Saving Description..." : "Save Description"}</button></div>}
-                  {showSocialPreview && socialContent && (
-                    <div className="social-preview-grid">
-                      <article className="social-preview-card"><div className="social-preview-card-header"><strong>LinkedIn</strong><span>{socialContent.linkedin.character_count}/{socialContent.linkedin.limit}</span></div><p>{socialContent.linkedin.text}</p></article>
-                      <article className="social-preview-card"><div className="social-preview-card-header"><strong>X / Twitter</strong><span>{socialContent.twitter.character_count}/{socialContent.twitter.limit}</span></div><p>{socialContent.twitter.text}</p></article>
-                    </div>
-                  )}
-                  {socialContentMessage && <p className="social-content-message">{socialContentMessage}</p>}
-                </div>
+                {generatedImageSaveMessage && (
+                  <p style={{ marginTop: 8 }}>
+                    {generatedImageSaveMessage}
+                  </p>
+                )}
 
               </div>
 
@@ -5427,75 +5544,265 @@ function writeAppSession(
 }
 
 
+/* ========================= HOME PAGE ========================= */
+
+function HomePage({
+  onOpenImageGenerator,
+  onOpenContentGenerator,
+}: {
+  onOpenImageGenerator: () => void;
+  onOpenContentGenerator: () => void;
+}) {
+  const openImageGenerator = onOpenImageGenerator;
+  const openContentGenerator = onOpenContentGenerator;
+
+  return (
+    <main className="home-page">
+      <div className="home-orb home-orb-purple" />
+      <div className="home-orb home-orb-pink" />
+      <div className="home-orb home-orb-cyan" />
+
+      <header className="home-header">
+        <button
+          type="button"
+          className="home-brand"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        >
+          <span className="home-brand-mark">✦</span>
+          <span className="home-brand-text">
+            <strong>Creative AI</strong>
+            <small>Studio</small>
+          </span>
+        </button>
+
+        <div className="home-ai-badge">
+          <span className="home-status-dot" />
+          AI CREATIVE WORKSPACE
+        </div>
+      </header>
+
+      <section className="home-hero">
+        <div className="home-hero-copy">
+          <div className="home-eyebrow">
+            <span>✦</span>
+            CREATE • DESIGN • GENERATE
+          </div>
+
+          <h1>
+            Bring your ideas
+            <span> to life with AI.</span>
+          </h1>
+
+          <p>
+            A single creative workspace for generating powerful visuals and
+            engaging content. Choose a workspace and start creating.
+          </p>
+
+          <div className="home-steps">
+            <div className="home-step">
+              <strong>01</strong>
+              <span>Choose</span>
+            </div>
+            <div className="home-step-line" />
+            <div className="home-step">
+              <strong>02</strong>
+              <span>Create</span>
+            </div>
+            <div className="home-step-line" />
+            <div className="home-step">
+              <strong>03</strong>
+              <span>Refine</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="home-visual" aria-hidden="true">
+          <div className="home-ring home-ring-large" />
+          <div className="home-ring home-ring-small" />
+          <div className="home-visual-core">
+            <span className="home-visual-spark">✦</span>
+            <strong>AI</strong>
+            <small>CREATE</small>
+          </div>
+          <span className="home-float home-float-one">✦</span>
+          <span className="home-float home-float-two">◆</span>
+          <span className="home-float home-float-three">●</span>
+          <span className="home-float home-float-four">✧</span>
+        </div>
+      </section>
+
+      <section className="home-workspaces">
+        <div className="home-section-heading">
+          <div>
+            <span>YOUR WORKSPACES</span>
+            <h2>What do you want to create?</h2>
+          </div>
+          <p>Pick a creative tool and turn your idea into something impressive.</p>
+        </div>
+
+        <div className="home-workspace-grid">
+          <button
+            type="button"
+            className="home-workspace-card home-image-card"
+            onClick={openImageGenerator}
+          >
+            <div className="home-card-glow" />
+
+            <div className="home-card-top">
+              <span className="home-card-icon home-image-icon">
+                <span className="home-image-frame">
+                  <span className="home-image-sun" />
+                  <span className="home-image-mountain" />
+                </span>
+              </span>
+              <span className="home-card-arrow">↗</span>
+            </div>
+
+            <div className="home-card-body">
+              <span className="home-card-kicker">VISUAL CREATION</span>
+              <h3>Image Generator</h3>
+              <p>
+                Create images from references, templates and prompts using
+                your selected AI services.
+              </p>
+            </div>
+
+            <div className="home-card-tags">
+              <span>References</span>
+              <span>Templates</span>
+              <span>AI Images</span>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="home-workspace-card home-content-card"
+            onClick={openContentGenerator}
+          >
+            <div className="home-card-glow" />
+
+            <div className="home-card-top">
+              <span className="home-card-icon home-content-icon">
+                <span />
+                <span />
+                <span />
+                <span />
+              </span>
+              <span className="home-card-arrow">↗</span>
+            </div>
+
+            <div className="home-card-body">
+              <span className="home-card-kicker">CONTENT CREATION</span>
+              <h3>Content Generator</h3>
+              <p>
+                Create structured and engaging content for training, marketing,
+                presentations, documentation and more.
+              </p>
+            </div>
+
+            <div className="home-card-tags">
+              <span>Ideas</span>
+              <span>Writing</span>
+              <span>Content</span>
+            </div>
+          </button>
+        </div>
+      </section>
+
+      <section className="home-bottom-banner">
+        <span>✦</span>
+        <div>
+          <strong>One workspace. Endless possibilities.</strong>
+          <small>Choose a tool above and start creating.</small>
+        </div>
+      </section>
+
+      <footer className="home-footer">
+        <span>Creative AI Studio</span>
+        <span>AI-powered creation workspace</span>
+      </footer>
+    </main>
+  );
+}
+
+
+function ContentGeneratorHome() {
+  return (
+    <main className="content-generator-placeholder">
+      <div className="content-generator-placeholder-card">
+        <div className="content-generator-placeholder-icon">✦</div>
+        <span>CONTENT GENERATOR</span>
+        <h1>Content creation workspace</h1>
+        <p>
+          This is the dedicated Content Generator area. The Home Page is now
+          ready to launch it independently from the Image Generator.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            window.location.href = "/";
+          }}
+        >
+          ← Back to Home
+        </button>
+      </div>
+    </main>
+  );
+}
+
+
+
+
 function App() {
+  const normalizePath = (path: string) =>
+    path.replace(/\/+$/, "") || "/";
 
-  const currentPath =
-    window.location.pathname.replace(
-      /\/+$/,
-      "",
-    ) || "/";
+  const [currentPath, setCurrentPath] = useState(() =>
+    normalizePath(window.location.pathname),
+  );
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(normalizePath(window.location.pathname));
+    };
 
-  /*
-   * Restore the last application stage and
-   * selected API service IDs when the page is
-   * refreshed during the same browser session.
-   */
-  const [
-    initialAppSession,
-  ] = useState<AppSessionState>(
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const [initialAppSession] = useState<AppSessionState>(
     () => readAppSession(),
   );
 
-
-  const [
-    apiSetupComplete,
-    setApiSetupComplete,
-  ] = useState(
+  const [apiSetupComplete, setApiSetupComplete] = useState(
     initialAppSession.apiSetupComplete,
   );
 
-
-  const [
-    selectedApiKeys,
-    setSelectedApiKeys,
-  ] = useState<string[]>(
+  const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>(
     initialAppSession.selectedApiKeys,
   );
 
+  const [selectedApiServices, setSelectedApiServices] =
+    useState<SelectedApiService[]>(initialAppSession.selectedApiServices);
 
-  const [
-    selectedApiServices,
-    setSelectedApiServices,
-  ] = useState<SelectedApiService[]>(
-    initialAppSession.selectedApiServices,
-  );
+  const navigateTo = (path: string) => {
+    const normalized = normalizePath(path);
 
-  const [availableApiServices, setAvailableApiServices] = useState<SelectedApiService[]>(initialAppSession.selectedApiServices);
+    if (normalizePath(window.location.pathname) !== normalized) {
+      window.history.pushState({}, "", normalized);
+    }
 
+    setCurrentPath(normalized);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
-  /*
-   * Keep BOTH screens mounted.
-   *
-   * This is important: when the user goes from
-   * Image Generator back to API Setup, the
-   * ImageGenerator component is hidden rather
-   * than destroyed. Therefore all of its current
-   * reference, template, prompt, output and UI
-   * state remains exactly where the user left it.
-   */
+  const showHome = currentPath === "/";
   const showApiSetup =
-    !apiSetupComplete;
-
+    currentPath === "/api-setup" ||
+    (currentPath === "/image-generator" && !apiSetupComplete);
   const showImageGenerator =
-    apiSetupComplete;
+    currentPath === "/image-generator" && apiSetupComplete;
 
-
-  /*
-   * Keep the browser-session state synchronized.
-   * This stores only service IDs and navigation
-   * state, never the actual API credentials.
-   */
   useEffect(() => {
     writeAppSession({
       apiSetupComplete,
@@ -5508,106 +5815,70 @@ function App() {
     selectedApiServices,
   ]);
 
-
-  if (
-    currentPath ===
-      "/project-manager" ||
-    currentPath ===
-      "/projectmanager"
-  ) {
-    return (
-      <ProjectManager />
-    );
+  if (currentPath === "/content-generator") {
+    return <ContentGeneratorHome />;
   }
 
+  if (
+    currentPath === "/project-manager" ||
+    currentPath === "/projectmanager"
+  ) {
+    return <ProjectManager />;
+  }
 
-;
+  const safeHome =
+    currentPath !== "/" &&
+    currentPath !== "/api-setup" &&
+    currentPath !== "/image-generator";
 
   return (
     <>
       <div
         style={{
-          display:
-            showApiSetup
-              ? "block"
-              : "none",
+          display: showHome || safeHome ? "block" : "none",
         }}
-        aria-hidden={
-          !showApiSetup
-        }
+        aria-hidden={!(showHome || safeHome)}
+      >
+        <HomePage
+          onOpenImageGenerator={() => navigateTo("/api-setup")}
+          onOpenContentGenerator={() => navigateTo("/content-generator")}
+        />
+      </div>
+
+      <div
+        style={{
+          display: showApiSetup ? "block" : "none",
+        }}
+        aria-hidden={!showApiSetup}
       >
         <ApiKeySetup
-          onComplete={(
-            selectedKeys,
-            selectedServices,
-          ) => {
-            void selectedKeys;
-
-            /*
-             * Do NOT clear anything when moving
-             * between API Setup and Image Generator.
-             */
-            setSelectedApiKeys(
-              selectedKeys,
-            );
-
-            setSelectedApiServices(
-              selectedServices,
-            );
-
-            setAvailableApiServices(selectedServices);
-
-            setApiSetupComplete(
-              true,
-            );
-
+          onBackToHome={() => navigateTo("/")}
+          onComplete={(selectedKeys, selectedServices) => {
+            setSelectedApiKeys(selectedKeys);
+            setSelectedApiServices(selectedServices);
+            setApiSetupComplete(true);
+            navigateTo("/image-generator");
           }}
         />
       </div>
 
-
       <div
         style={{
-          display:
-            showImageGenerator
-              ? "block"
-              : "none",
+          display: showImageGenerator ? "block" : "none",
         }}
-        aria-hidden={
-          !showImageGenerator
-        }
+        aria-hidden={!showImageGenerator}
       >
         <ImageGenerator
-          selectedApiKeys={
-            selectedApiKeys
-          }
-          selectedApiServices={
-            selectedApiServices
-          }
-          availableApiServices={availableApiServices}
-          onApiSelectionChange={(keys, services) => {
-            setSelectedApiKeys(keys);
-            setSelectedApiServices(services);
-          }}
+          selectedApiKeys={selectedApiKeys}
+          selectedApiServices={selectedApiServices}
           onBackToApiSetup={() => {
-
-            /*
-             * IMPORTANT:
-             * Do not clear selectedApiKeys.
-             * Do not destroy ImageGenerator.
-             *
-             * Only switch the visible stage.
-             */
-            setApiSetupComplete(
-              false,
-            );
-
+            setApiSetupComplete(false);
+            navigateTo("/api-setup");
           }}
         />
       </div>
     </>
   );
 }
-
 
 export default App;
