@@ -123,92 +123,17 @@ CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
 
-# -------------------------------------------------------------------
-# Railway / environment-based Google Drive OAuth credentials
-# -------------------------------------------------------------------
-# Local development can continue using credentials.json/token.json exactly
-# as before.  On Railway, the filesystem does not contain those local files
-# unless they are included in the deployment image.  The deployment therefore
-# supports the existing credentials as base64-encoded environment variables.
-#
-# These variables contain secrets and are never returned by an API endpoint.
-GOOGLE_DRIVE_CREDENTIALS_ENV = "GOOGLE_DRIVE_CREDENTIALS_JSON_B64"
-GOOGLE_DRIVE_TOKEN_ENV = "GOOGLE_DRIVE_TOKEN_JSON_B64"
-
-
-def _restore_drive_secret_from_environment(
-    env_name: str,
-    destination: Path,
-    description: str,
-) -> bool:
-    """
-    Materialize a Google OAuth JSON file from a Railway environment variable.
-
-    Existing local files always win, so local development behavior is unchanged.
-    The environment value is expected to be base64-encoded JSON.  Raw JSON is
-    also accepted as a fallback to make deployment configuration less fragile.
-    """
-    if destination.exists() and destination.is_file() and destination.stat().st_size > 0:
-        return True
-
-    encoded = str(os.getenv(env_name, "") or "").strip()
-    if not encoded:
-        return False
-
-    try:
-        try:
-            decoded = base64.b64decode(
-                encoded,
-                validate=True,
-            )
-            decoded_text = decoded.decode("utf-8")
-        except Exception:
-            # Allow a raw JSON environment value as a deployment fallback.
-            decoded_text = encoded
-
-        parsed = json.loads(decoded_text)
-        if not isinstance(parsed, dict):
-            raise ValueError(f"{description} is not a JSON object.")
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            json.dumps(parsed, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        print(
-            f"Loaded {description} from environment variable "
-            f"{env_name}."
-        )
-        return True
-    except Exception as exc:
-        print(
-            f"Unable to restore {description} from {env_name}:",
-            repr(exc),
-        )
-        return False
-
-
-def _restore_drive_oauth_from_environment() -> None:
-    """
-    Restore credentials.json and token.json when running on a deployment
-    platform such as Railway.
-
-    This is deliberately called once during startup and is a no-op when the
-    normal local files already exist.
-    """
-    _restore_drive_secret_from_environment(
-        GOOGLE_DRIVE_CREDENTIALS_ENV,
-        CREDENTIALS_FILE,
-        "Google Drive credentials.json",
-    )
-    _restore_drive_secret_from_environment(
-        GOOGLE_DRIVE_TOKEN_ENV,
-        TOKEN_FILE,
-        "Google Drive token.json",
-    )
-
-
-_restore_drive_oauth_from_environment()
+# Railway deployment support:
+# Keep the existing local credentials.json/token.json flow, but also allow
+# the same OAuth files to be supplied securely through environment variables.
+# This avoids committing Google OAuth secrets to Git.
+DRIVE_CREDENTIALS_ENV = "GOOGLE_DRIVE_CREDENTIALS_JSON_B64"
+DRIVE_TOKEN_ENV = "GOOGLE_DRIVE_TOKEN_JSON_B64"
+# Backward-compatible names supported for existing local/deployment setups.
+DRIVE_CREDENTIALS_ENV_LEGACY = "GOOGLE_OAUTH_CREDENTIALS_JSON"
+DRIVE_TOKEN_ENV_LEGACY = "GOOGLE_OAUTH_TOKEN_JSON"
+DRIVE_FOLDER_ENV = "GOOGLE_DRIVE_FOLDER_ID"
+DRIVE_OUTPUT_FOLDER_ENV = "GOOGLE_DRIVE_OUTPUT_FOLDER_ID"
 
 API_KEY_STATE = {
     "keys": {},
@@ -266,26 +191,22 @@ def load_persisted_drive_configuration() -> None:
     Google Drive authentication continues to use credentials.json/token.json.
     """
     if not DRIVE_CONFIG_FILE.exists():
-        # Railway may provide the Drive folder configuration through service
-        # variables.  Use it only as a fallback; an uploaded API configuration
-        # or an existing drive_config.json remains authoritative.
+        # Railway provides non-secret Drive folder configuration as service
+        # variables. Keep drive_config.json authoritative when it exists, but
+        # use these variables on a fresh deployment.
         env_folder_id = normalize_drive_folder_id(
-            str(os.getenv("GOOGLE_DRIVE_FOLDER_ID", "") or "")
+            str(os.getenv(DRIVE_FOLDER_ENV, "") or "")
         )
         env_output_folder_id = str(
-            os.getenv("GOOGLE_DRIVE_OUTPUT_FOLDER_ID", "") or ""
+            os.getenv(DRIVE_OUTPUT_FOLDER_ENV, "") or ""
         ).strip()
-
         if env_folder_id:
             API_KEY_STATE["drive_folder_id"] = env_folder_id
         if env_output_folder_id:
             API_KEY_STATE["drive_output_folder_id"] = env_output_folder_id
-
         if env_folder_id or env_output_folder_id:
             API_KEY_STATE["drive_output_folder_name"] = "outputs"
-            print(
-                "Loaded Google Drive folder configuration from environment."
-            )
+            print("Loaded Google Drive folder configuration from environment.")
         return
 
     try:
@@ -1015,14 +936,91 @@ def normalize_drive_folder_id(value: str) -> str:
     return value
 
 
+def _decode_json_secret(value: str, label: str) -> dict | None:
+    """Decode a JSON secret supplied through an environment variable.
+
+    Railway variables are kept as strings. Accept normal JSON as well as
+    base64-encoded JSON so multiline OAuth files can be stored safely.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    candidates = [raw]
+    try:
+        decoded = base64.b64decode(raw, validate=True).decode("utf-8")
+        if decoded.strip():
+            candidates.append(decoded)
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+
+    raise RuntimeError(
+        f"Google Drive {label} environment variable does not contain valid JSON."
+    )
+
+
+def _load_drive_client_config() -> dict | None:
+    """Load OAuth client configuration from env first, then local file."""
+    env_value = (
+        os.getenv(DRIVE_CREDENTIALS_ENV, "").strip()
+        or os.getenv(DRIVE_CREDENTIALS_ENV_LEGACY, "").strip()
+    )
+    if env_value:
+        return _decode_json_secret(env_value, "OAuth credentials")
+
+    if CREDENTIALS_FILE.exists():
+        try:
+            payload = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "Google Drive credentials.json could not be read."
+            ) from exc
+
+    return None
+
+
+def _load_drive_token_config() -> dict | None:
+    """Load the authorized-user token from env first, then local token.json."""
+    env_value = (
+        os.getenv(DRIVE_TOKEN_ENV, "").strip()
+        or os.getenv(DRIVE_TOKEN_ENV_LEGACY, "").strip()
+    )
+    if env_value:
+        return _decode_json_secret(env_value, "OAuth token")
+
+    if TOKEN_FILE.exists():
+        try:
+            payload = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "Google Drive token.json could not be read."
+            ) from exc
+
+    return None
+
+
+def _drive_credentials_configured() -> bool:
+    return _load_drive_client_config() is not None
+
+
+def _drive_token_configured() -> bool:
+    return _load_drive_token_config() is not None
+
+
 def drive_oauth_available() -> bool:
-    _restore_drive_oauth_from_environment()
-    return CREDENTIALS_FILE.exists()
-
-
-def drive_token_available() -> bool:
-    _restore_drive_oauth_from_environment()
-    return TOKEN_FILE.exists()
+    return _drive_credentials_configured()
 
 
 def drive_oauth_selected() -> bool:
@@ -1032,8 +1030,8 @@ def drive_oauth_selected() -> bool:
     "Google Drive API" checkbox.
     """
     return (
-        CREDENTIALS_FILE.exists()
-        and TOKEN_FILE.exists()
+        _drive_credentials_configured()
+        and _drive_token_configured()
         and bool(
             normalize_drive_folder_id(
                 API_KEY_STATE.get("drive_folder_id", "")
@@ -1044,21 +1042,37 @@ def drive_oauth_selected() -> bool:
 
 
 def get_drive_service():
-    if not CREDENTIALS_FILE.exists():
+    """Return an authenticated Google Drive service.
+
+    Local development keeps using backend/credentials.json and backend/token.json.
+    Railway can instead provide those same JSON documents through
+    GOOGLE_OAUTH_CREDENTIALS_JSON and GOOGLE_OAUTH_TOKEN_JSON.
+    """
+    client_config = _load_drive_client_config()
+    if not client_config:
         raise RuntimeError(
-            "Google Drive OAuth credentials.json was not found in the backend folder."
+            "Google Drive OAuth credentials were not found. Provide "
+            "backend/credentials.json locally or set GOOGLE_OAUTH_CREDENTIALS_JSON on Railway."
+        )
+
+    token_config = _load_drive_token_config()
+    if not token_config:
+        raise RuntimeError(
+            "Google Drive OAuth token was not found. Provide backend/token.json locally "
+            "or set GOOGLE_OAUTH_TOKEN_JSON on Railway."
         )
 
     credentials = None
 
-    if TOKEN_FILE.exists():
-        try:
-            credentials = Credentials.from_authorized_user_file(
-                str(TOKEN_FILE),
-                DRIVE_SCOPES,
-            )
-        except Exception:
-            credentials = None
+    try:
+        credentials = Credentials.from_authorized_user_info(
+            token_config,
+            DRIVE_SCOPES,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Google Drive token.json/OAuth token is invalid or incomplete."
+        ) from exc
 
     if credentials and credentials.valid:
         return build(
@@ -1070,10 +1084,16 @@ def get_drive_service():
     if credentials and credentials.expired and credentials.refresh_token:
         try:
             credentials.refresh(GoogleAuthRequest())
-            TOKEN_FILE.write_text(
-                credentials.to_json(),
-                encoding="utf-8",
-            )
+
+            # Keep the old local behavior: refreshed credentials are persisted
+            # when token.json exists. On Railway, secrets come from environment
+            # variables, so do not attempt to write them into the container.
+            if not os.getenv(DRIVE_TOKEN_ENV, "").strip():
+                TOKEN_FILE.write_text(
+                    credentials.to_json(),
+                    encoding="utf-8",
+                )
+
             return build(
                 "drive",
                 "v3",
@@ -1082,12 +1102,13 @@ def get_drive_service():
         except Exception as exc:
             raise RuntimeError(
                 "Google Drive authorization has expired and could not be refreshed. "
-                "Run 'python test_google_drive.py' once to authorize again."
+                "Verify GOOGLE_OAUTH_TOKEN_JSON on Railway or run "
+                "'python test_google_drive.py' locally to authorize again."
             ) from exc
 
     raise RuntimeError(
-        "Google Drive is not authorized yet. Run 'python test_google_drive.py' "
-        "once from the backend folder, then restart the backend."
+        "Google Drive is not authorized yet. Provide a valid authorized-user token "
+        "through backend/token.json locally or GOOGLE_OAUTH_TOKEN_JSON on Railway."
     )
 
 
@@ -1125,28 +1146,21 @@ def require_drive_configuration():
             ),
         )
 
-    # These files may have been restored from Railway environment variables
-    # during startup.  Calling this again is harmless and also supports
-    # development/reload scenarios.
-    _restore_drive_oauth_from_environment()
-
-    if not CREDENTIALS_FILE.exists():
+    if not _drive_credentials_configured():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Drive credentials.json was not found. "
-                "Set GOOGLE_DRIVE_CREDENTIALS_JSON_B64 in Railway or provide "
-                "credentials.json locally."
+                "Google Drive OAuth credentials were not configured. Provide "
+                "backend/credentials.json locally or set GOOGLE_OAUTH_CREDENTIALS_JSON on Railway."
             ),
         )
 
-    if not TOKEN_FILE.exists():
+    if not _drive_token_configured():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Drive token.json was not found. "
-                "Set GOOGLE_DRIVE_TOKEN_JSON_B64 in Railway or provide "
-                "token.json locally."
+                "Google Drive OAuth token was not configured. Provide backend/token.json locally "
+                "or set GOOGLE_OAUTH_TOKEN_JSON on Railway."
             ),
         )
 
@@ -1425,6 +1439,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://frontend-production-14d5.up.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -1787,6 +1802,69 @@ def api_key_status():
 
 
 # -------------------------------------------------------------------
+# Google Drive output-folder configuration
+# -------------------------------------------------------------------
+
+@app.get("/api/drive/folders")
+def get_drive_folders():
+    """Return the configured Google Drive parent/output folders.
+
+    The frontend uses this endpoint only for the Save-to-Drive folder picker.
+    It does not expose OAuth secrets or API-key values.
+    """
+    folder_id, folder_name = require_drive_configuration()
+
+    try:
+        service = get_drive_service()
+        resolved_parent_id = resolve_drive_folder_id(
+            service,
+            folder_id,
+            folder_name,
+        )
+
+        # Keep the configured parent as the selectable folder. The actual
+        # generated image is always placed in its `outputs` child folder.
+        parent_name = str(folder_name or "").strip()
+        if not parent_name:
+            metadata = service.files().get(
+                fileId=resolved_parent_id,
+                fields="id,name",
+            ).execute()
+            parent_name = str(metadata.get("name") or "Google Drive folder")
+
+        outputs_folder_id = ensure_drive_outputs_folder(
+            service,
+            resolved_parent_id,
+        )
+
+        API_KEY_STATE["drive_folder_id"] = resolved_parent_id
+        API_KEY_STATE["drive_folder_name"] = parent_name
+        API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
+        API_KEY_STATE["drive_output_folder_name"] = "outputs"
+        persist_drive_configuration()
+
+        return {
+            "success": True,
+            "folders": [
+                {
+                    "id": resolved_parent_id,
+                    "name": parent_name,
+                    "label": parent_name,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print("Google Drive folder loading failed:", repr(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to load configured Google Drive output folders: {exc}",
+        ) from exc
+
+
+# -------------------------------------------------------------------
 # Google Drive input files
 # -------------------------------------------------------------------
 
@@ -1991,8 +2069,8 @@ def get_input_files() -> list[dict]:
 
     if (
         has_drive_configuration
-        and drive_oauth_available()
-        and drive_token_available()
+        and CREDENTIALS_FILE.exists()
+        and TOKEN_FILE.exists()
     ):
         try:
             folder_id = normalize_drive_folder_id(
@@ -2430,7 +2508,7 @@ def tag_all_input_files():
 
     if (
         drive_oauth_available()
-        and drive_token_available()
+        and TOKEN_FILE.exists()
         and (
             API_KEY_STATE.get("drive_folder_id")
             or API_KEY_STATE.get("drive_folder_name")
@@ -2710,9 +2788,12 @@ def get_generated_image(filename: str):
 
 
 @app.post("/api/images/save-to-drive")
-def save_generated_image_to_drive(filename: str = Form(...)):
-    """Save a generated local image into the `outputs` folder under the Drive reference folder."""
-    require_drive_configuration()
+def save_generated_image_to_drive(
+    filename: str = Form(...),
+    folder_id: str = Form(""),
+):
+    """Save a generated local image into an `outputs` folder under the selected Drive folder."""
+    configured_folder_id, configured_folder_name = require_drive_configuration()
     safe_name = Path(filename).name
     if not safe_name:
         raise HTTPException(status_code=400, detail="Generated image filename is required.")
@@ -2723,10 +2804,11 @@ def save_generated_image_to_drive(filename: str = Form(...)):
 
     try:
         service = get_drive_service()
-        parent_folder_id = resolve_drive_folder_id(
+        requested_folder_id = normalize_drive_folder_id(folder_id)
+        parent_folder_id = requested_folder_id or resolve_drive_folder_id(
             service,
-            normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
-            str(API_KEY_STATE.get("drive_folder_name", "") or ""),
+            configured_folder_id,
+            configured_folder_name,
         )
         outputs_folder_id = ensure_drive_outputs_folder(service, parent_folder_id)
         API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
