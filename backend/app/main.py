@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from app.services.canva_mcp_service import canva_mcp_service
 from app.services.canva_connect_service import canva_connect_service
 
+
 from fastapi import (
     FastAPI,
     File,
@@ -1282,7 +1283,7 @@ def get_drive_service():
     # ---------------------------------------------------------
     if credentials and credentials.expired and credentials.refresh_token:
         try:
-            credentials.refresh(Request())
+            credentials.refresh(GoogleAuthRequest())
 
         except Exception as exc:
             raise RuntimeError(
