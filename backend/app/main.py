@@ -2085,11 +2085,7 @@ def get_input_files() -> list[dict]:
         or API_KEY_STATE.get("drive_folder_name", "")
     )
 
-    if (
-        has_drive_configuration
-        and CREDENTIALS_FILE.exists()
-        and TOKEN_FILE.exists()
-    ):
+    if has_drive_configuration:
         try:
             folder_id = normalize_drive_folder_id(
                 API_KEY_STATE.get("drive_folder_id", "")
