@@ -141,10 +141,17 @@ EDITABLE_DESIGNS_DIR.mkdir(
 # -------------------------------------------------------------------
 
 DRIVE_OAUTH_KEY_ID = "__GOOGLE_DRIVE_OAUTH__"
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
-DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
+
+GOOGLE_OAUTH_CREDENTIALS_JSON = os.getenv(
+    "GOOGLE_OAUTH_CREDENTIALS_JSON", ""
+).strip()
+
+GOOGLE_OAUTH_TOKEN_JSON = os.getenv(
+    "GOOGLE_OAUTH_TOKEN_JSON", ""
+).strip()
 
 API_KEY_STATE = {
     "keys": {},
@@ -1229,50 +1236,133 @@ def drive_oauth_selected() -> bool:
 
 
 def get_drive_service():
-    if not CREDENTIALS_FILE.exists():
-        raise RuntimeError(
-            "Google Drive OAuth credentials.json was not found in the backend folder."
-        )
+    """
+    Create an authenticated Google Drive service.
 
+    Railway:
+      GOOGLE_OAUTH_CREDENTIALS_JSON
+      GOOGLE_OAUTH_TOKEN_JSON
+
+    Local development:
+      credentials.json
+      token.json
+    """
     credentials = None
 
-    if TOKEN_FILE.exists():
+    # ---------------------------------------------------------
+    # 1. Load saved OAuth token
+    # ---------------------------------------------------------
+    if GOOGLE_OAUTH_TOKEN_JSON:
+        try:
+            token_config = json.loads(GOOGLE_OAUTH_TOKEN_JSON)
+
+            credentials = Credentials.from_authorized_user_info(
+                token_config
+            )
+
+        except Exception as exc:
+            raise RuntimeError(
+                f"Invalid GOOGLE_OAUTH_TOKEN_JSON: {exc}"
+            ) from exc
+
+    elif TOKEN_FILE.exists():
         try:
             credentials = Credentials.from_authorized_user_file(
                 str(TOKEN_FILE),
                 DRIVE_SCOPES,
             )
-        except Exception:
-            credentials = None
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to load Google Drive token.json: {exc}"
+            ) from exc
 
-    if credentials and credentials.valid:
-        return build(
-            "drive",
-            "v3",
-            credentials=credentials,
-        )
-
+    # ---------------------------------------------------------
+    # 2. Refresh an expired token
+    # ---------------------------------------------------------
     if credentials and credentials.expired and credentials.refresh_token:
         try:
-            credentials.refresh(GoogleAuthRequest())
+            credentials.refresh(Request())
+
+        except Exception as exc:
+            raise RuntimeError(
+                f"Google Drive OAuth refresh failed: {exc}"
+            ) from exc
+
+    # ---------------------------------------------------------
+    # 3. If no usable token exists, create OAuth credentials
+    # ---------------------------------------------------------
+    if not credentials or not credentials.valid:
+
+        # Railway credentials
+        if GOOGLE_OAUTH_CREDENTIALS_JSON:
+            try:
+                client_config = json.loads(
+                    GOOGLE_OAUTH_CREDENTIALS_JSON
+                )
+
+                flow = InstalledAppFlow.from_client_config(
+                    client_config,
+                    DRIVE_SCOPES,
+                )
+
+                # This should normally not be reached on Railway when
+                # GOOGLE_OAUTH_TOKEN_JSON is valid.
+                credentials = flow.run_local_server(
+                    port=0,
+                    access_type="offline",
+                    prompt="consent",
+                )
+
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Unable to initialize Google Drive OAuth from "
+                    f"GOOGLE_OAUTH_CREDENTIALS_JSON: {exc}"
+                ) from exc
+
+        # Local credentials.json
+        elif CREDENTIALS_FILE.exists():
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(CREDENTIALS_FILE),
+                    DRIVE_SCOPES,
+                )
+
+                credentials = flow.run_local_server(
+                    port=0,
+                    access_type="offline",
+                    prompt="consent",
+                )
+
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Unable to authorize Google Drive locally: {exc}"
+                ) from exc
+
+        else:
+            raise RuntimeError(
+                "Google Drive OAuth credentials were not found. "
+                "Set GOOGLE_OAUTH_CREDENTIALS_JSON and "
+                "GOOGLE_OAUTH_TOKEN_JSON on Railway, or provide "
+                "credentials.json and token.json locally."
+            )
+
+    # ---------------------------------------------------------
+    # 4. Persist locally when running locally
+    # ---------------------------------------------------------
+    if not GOOGLE_OAUTH_TOKEN_JSON and credentials:
+        try:
             TOKEN_FILE.write_text(
                 credentials.to_json(),
                 encoding="utf-8",
             )
-            return build(
-                "drive",
-                "v3",
-                credentials=credentials,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Google Drive authorization has expired and could not be refreshed. "
-                "Run 'python test_google_drive.py' once to authorize again."
-            ) from exc
+        except Exception:
+            pass
 
-    raise RuntimeError(
-        "Google Drive is not authorized yet. Run 'python test_google_drive.py' "
-        "once from the backend folder, then restart the backend."
+    return build(
+        "drive",
+        "v3",
+        credentials=credentials,
+        cache_discovery=False,
     )
 
 
