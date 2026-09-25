@@ -18,8 +18,7 @@ import type {
 } from "./services/templateService";
 
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 
 
 function resolveApiUrl(url: string): string {
@@ -63,6 +62,8 @@ interface InputFile {
     | "input-folder";
 }
 
+
+interface DriveOutputFolder { id: string; name: string; label?: string; }
 
 interface ReferenceData {
   type: ReferenceType;
@@ -182,12 +183,14 @@ function formatReferenceType(
       return "Reference";
   }
 }
+void formatReferenceType;
 
 
 interface ApiKeyOption {
   id: string;
   name: string;
   keyName: string;
+  authType?: string;
   displayName?: string;
   duplicateNumber?: number;
 }
@@ -210,15 +213,13 @@ interface ApiKeySetupProps {
 
 function ApiKeySetup({
   onComplete,
+  onBackToHome,
 }: ApiKeySetupProps) {
   const [apiFile, setApiFile] =
     useState<File | null>(null);
 
   const [apiKeys, setApiKeys] =
     useState<ApiKeyOption[]>([]);
-
-  const [selectedKeys, setSelectedKeys] =
-    useState<string[]>([]);
 
   const [isUploading, setIsUploading] =
     useState(false);
@@ -238,7 +239,6 @@ function ApiKeySetup({
   ) {
     setApiFile(file);
     setApiKeys([]);
-    setSelectedKeys([]);
     setError("");
     setIsUploading(true);
 
@@ -257,6 +257,7 @@ function ApiKeySetup({
           {
             method: "POST",
             body: formData,
+            credentials: "include",
           },
         );
 
@@ -282,15 +283,39 @@ function ApiKeySetup({
 
 
       /*
-       * Keep every supported API entry. If the uploaded file
-       * contains the same service more than once, give each
-       * duplicate a numbered display name instead of silently
-       * removing it.
+       * Google Drive is intentionally NOT an API-key selection option.
+       * It is an OAuth-backed reference source and is used directly by
+       * the Google Drive reference loader in the Image Generator.
+       *
+       * Keep the Drive credential/configuration on the backend, but hide
+       * its synthetic OAuth entry from this API selection screen.
+       */
+      const visibleRawKeys = rawKeys.filter((api) => {
+        const name = String(api.name || "").toLowerCase();
+        const keyName = String(api.keyName || "").toLowerCase();
+
+        return (
+          api.authType !== "oauth" &&
+          !name.includes("google drive") &&
+          !keyName.includes("google_drive") &&
+          !keyName.includes("gdrive")
+        );
+      });
+
+
+      /*
+       * Keep every supported AI/API credential. Multiple credentials for
+       * the same provider can be selected independently.
+       *
+       * Examples:
+       *   Gemini API
+       *   Gemini API 2
+       *   Gemini API 3
        */
       const serviceCounts =
         new Map<string, number>();
 
-      const keys = rawKeys.map((api) => {
+      const keys = visibleRawKeys.map((api) => {
         const baseName =
           api.name.trim() || "API";
         const normalizedName =
@@ -339,6 +364,14 @@ function ApiKeySetup({
       });
 
 
+      if (!displayKeys.length) {
+        throw new Error(
+          "No supported API keys were found in the uploaded file.",
+        );
+      }
+
+      setApiKeys(displayKeys);
+
       if (!keys.length) {
         throw new Error(
           "No supported API keys were found in the uploaded file.",
@@ -367,23 +400,6 @@ function ApiKeySetup({
   }
 
 
-  function toggleApiKey(
-    keyId: string,
-  ) {
-    setSelectedKeys(
-      (current) =>
-        current.includes(keyId)
-          ? current.filter(
-              (id) =>
-                id !== keyId,
-            )
-          : [
-              ...current,
-              keyId,
-            ],
-    );
-  }
-
 
   function handleDownloadApiTemplate() {
     const templateBlob = new Blob([], {
@@ -397,7 +413,7 @@ function ApiKeySetup({
       document.createElement("a");
 
     link.href = downloadUrl;
-    link.download = "API Key Template.txt";
+    link.download = "API key Template.txt";
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -407,11 +423,8 @@ function ApiKeySetup({
 
 
   async function handleContinue() {
-    if (!selectedKeys.length) {
-      setError(
-        "Select at least one API before continuing.",
-      );
-
+    if (!apiKeys.length) {
+      setError("Upload an API key file before continuing.");
       return;
     }
 
@@ -429,9 +442,9 @@ function ApiKeySetup({
                 "application/json",
             },
             body: JSON.stringify({
-              selected_ids:
-                selectedKeys,
+              selected_ids: [],
             }),
+            credentials: "include",
           },
         );
 
@@ -450,16 +463,14 @@ function ApiKeySetup({
       }
 
       const selectedServices =
-        apiKeys.filter((api) =>
-          selectedKeys.includes(api.id),
-        ).map((api) => ({
+        apiKeys.map((api) => ({
           id: api.id,
           name: api.name,
           keyName: api.keyName,
         }));
 
       onComplete(
-        selectedKeys,
+        [],
         selectedServices,
       );
 
@@ -554,11 +565,11 @@ function ApiKeySetup({
             <div>
 
               <strong>
-                Select APIs
+                Review APIs
               </strong>
 
               <small>
-                Choose the services to activate.
+                API keys can be selected from the workspace header.
               </small>
 
             </div>
@@ -571,7 +582,7 @@ function ApiKeySetup({
 
           <div
             className={`api-setup-step ${
-              selectedKeys.length
+              apiKeys.length
                 ? "active"
                 : ""
             }`}
@@ -717,14 +728,14 @@ function ApiKeySetup({
                 </span>
 
                 <strong>
-                  Select API services
+                  Available API services
                 </strong>
 
               </div>
 
               {apiKeys.length > 0 && (
                 <small>
-                  {selectedKeys.length} selected
+                  {apiKeys.length} available
                 </small>
               )}
 
@@ -773,28 +784,15 @@ function ApiKeySetup({
                 {apiKeys.map(
                   (api) => (
 
-                    <label
+                    <div
                       key={api.id}
-                      className={`api-key-option ${
-                        selectedKeys.includes(
-                          api.id,
-                        )
-                          ? "selected"
-                          : ""
-                      }`}
+                      className="api-key-option"
+                      style={{
+                        cursor: "default",
+                        transition:
+                          "border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease",
+                      }}
                     >
-
-                      <input
-                        type="checkbox"
-                        checked={selectedKeys.includes(
-                          api.id,
-                        )}
-                        onChange={() =>
-                          toggleApiKey(
-                            api.id,
-                          )
-                        }
-                      />
 
                       <span
                         className="api-key-service-icon"
@@ -819,23 +817,16 @@ function ApiKeySetup({
                         </strong>
 
                         <small>
-                          {api.name ===
-                          "Google Drive API"
-                            ? "OAuth access available"
-                            : "API credential detected"}
+                          API credential detected
                         </small>
 
                       </span>
 
                       <span className="api-key-state">
-                        {selectedKeys.includes(
-                          api.id,
-                        )
-                          ? "Selected"
-                          : "Select"}
+                        Available
                       </span>
 
-                    </label>
+                    </div>
 
                   ),
                 )}
@@ -880,12 +871,21 @@ function ApiKeySetup({
           </div>
 
 
-          <button
-            type="button"
-            className="api-continue-button"
+          <div className="api-setup-footer-actions">
+            <button
+              type="button"
+              className="api-back-home-button"
+              onClick={onBackToHome}
+            >
+              <span>←</span>
+              Home
+            </button>
+
+            <button
+              type="button"
+              className="api-continue-button"
             disabled={
               !apiKeys.length ||
-              !selectedKeys.length ||
               isSaving
             }
             onClick={
@@ -894,7 +894,7 @@ function ApiKeySetup({
           >
 
             {isSaving
-              ? "Activating..."
+              ? "Loading..."
               : "Continue to Image Generator"}
 
             <span>
@@ -902,6 +902,7 @@ function ApiKeySetup({
             </span>
 
           </button>
+          </div>
 
         </div>
 
@@ -915,8 +916,10 @@ function ApiKeySetup({
 interface ImageGeneratorProps {
   selectedApiKeys: string[];
   selectedApiServices: SelectedApiService[];
+  availableApiServices: SelectedApiService[];
+  onApiSelectionChange: (selectedIds: string[]) => void;
   onBackToApiSetup: () => void;
-}
+  onBackToHome: () => void;}
 
 
 function getApiServiceIcon(
@@ -1453,15 +1456,23 @@ function getApiServiceIcon(
 function ImageGenerator({
   selectedApiKeys,
   selectedApiServices,
+  availableApiServices,
+  onApiSelectionChange,
   onBackToApiSetup,
+  onBackToHome,
 }: ImageGeneratorProps) {
+
+  void selectedApiServices;
 
 
   const [inputFiles, setInputFiles] =
     useState<InputFile[]>([]);
 
-  const [selectedInputId, setSelectedInputId] =
-    useState("");
+  const [selectedInputIds, setSelectedInputIds] =
+    useState<string[]>([]);
+
+  // Keep the first selected reference for the existing preview area.
+  const selectedInputId = selectedInputIds[0] || "";
 
   const [reference, setReference] =
     useState<ReferenceData | null>(null);
@@ -1524,8 +1535,26 @@ function ImageGenerator({
   const [generatedImageSaveMessage, setGeneratedImageSaveMessage] =
     useState("");
 
+  const [driveOutputFolders, setDriveOutputFolders] = useState<DriveOutputFolder[]>([]);
+  const [selectedOutputFolderId, setSelectedOutputFolderId] = useState("");
+  const [isOutputFolderPickerOpen, setIsOutputFolderPickerOpen] = useState(false);
+
   const [generatedTextChanges, setGeneratedTextChanges] =
     useState<Record<string, string>>({});
+
+  // Social-media description output is intentionally a separate stage after
+  // final image generation. It does not change the existing image pipeline.
+  const [socialDescriptions, setSocialDescriptions] =
+    useState<Record<string, { text: string; character_count: number; character_limit: number }>>({});
+  const [isGeneratingSocialDescriptions, setIsGeneratingSocialDescriptions] =
+    useState(false);
+  const [socialDescriptionError, setSocialDescriptionError] = useState("");
+  const [isSocialDescriptionPreviewOpen, setIsSocialDescriptionPreviewOpen] =
+    useState(false);
+  const [isSavingSocialDescriptions, setIsSavingSocialDescriptions] =
+    useState(false);
+  const [socialDescriptionSaved, setSocialDescriptionSaved] = useState(false);
+  const [socialDescriptionSaveMessage, setSocialDescriptionSaveMessage] = useState("");
 
   const [isGeneratingImage, setIsGeneratingImage] =
     useState(false);
@@ -1578,6 +1607,22 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
+  async function loadDriveOutputFolders() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/drive/folders`, { credentials: "include" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(data?.detail || "Unable to load Google Drive folders."));
+      const folders: DriveOutputFolder[] = Array.isArray(data?.folders) ? data.folders : [];
+      setDriveOutputFolders(folders);
+      setSelectedOutputFolderId((current) => current && folders.some((f) => f.id === current) ? current : String(folders[0]?.id || ""));
+    } catch (error) {
+      console.error("Loading Google Drive output folders failed:", error);
+      setDriveOutputFolders([]);
+      setSelectedOutputFolderId("");
+    }
+  }
+
+
   async function loadInputFiles() {
     setIsLoadingInputs(true);
     setError("");
@@ -1586,6 +1631,9 @@ function ImageGenerator({
       const response =
         await fetch(
           `${API_BASE_URL}/api/inputs`,
+          {
+            credentials: "include",
+          },
         );
 
       if (!response.ok) {
@@ -1683,6 +1731,7 @@ function ImageGenerator({
 
   useEffect(() => {
     void loadInputFiles();
+    void loadDriveOutputFolders();
 
     // Load Google Drive references once when
     // the workspace opens.
@@ -1711,6 +1760,8 @@ function ImageGenerator({
                   {
                     cache:
                       "no-store",
+                    credentials:
+                      "include",
                   },
                 );
 
@@ -1863,6 +1914,7 @@ function ImageGenerator({
           `${API_BASE_URL}/api/inputs/tag-all`,
           {
             method: "POST",
+          credentials: "include",
           },
         );
 
@@ -2106,6 +2158,23 @@ function ImageGenerator({
   }
 
 
+  function getDriveReferenceNumber(file: InputFile): number | null {
+    if (file.source !== "google-drive") {
+      return null;
+    }
+
+    const driveFiles = inputFiles.filter(
+      (item) => item.source === "google-drive",
+    );
+
+    const index = driveFiles.findIndex(
+      (item) => item.id === file.id,
+    );
+
+    return index >= 0 ? index + 1 : null;
+  }
+
+
   /*
    * ------------------------------------------------------------
    * Automatically tag loaded images
@@ -2138,91 +2207,68 @@ function ImageGenerator({
   function handleReferenceSelection(
     file: InputFile,
   ) {
+    const wasSelected = selectedInputIds.includes(file.id);
+    const nextSelectedIds = wasSelected
+      ? selectedInputIds.filter((id) => id !== file.id)
+      : [...selectedInputIds, file.id];
 
-    setSelectedInputId(
-      file.id,
-    );
+    setSelectedInputIds(nextSelectedIds);
 
-    setTemplatePrompt(
-      "",
-    );
+    const nextPrimaryId = nextSelectedIds[0] || "";
+    const primaryFile = inputFiles.find((item) => item.id === nextPrimaryId);
 
+    if (!primaryFile) {
+      setReference(null);
+      setTemplatePrompt("");
+      setGeneratedImageUrl("");
+      setGeneratedImageFilename("");
+      setGeneratedImageModel("");
+      setError("");
+      setTemplateResult(null);
+      return;
+    }
+
+    const extension = primaryFile.name.includes(".")
+      ? `.${primaryFile.name.split(".").pop()?.toLowerCase()}`
+      : "";
+
+    const selectedReference: ReferenceData = {
+      type: getReferenceType(extension, primaryFile.mimeType),
+      name: primaryFile.name,
+      url: previewUrls[primaryFile.id] || resolveApiUrl(primaryFile.url),
+      size: primaryFile.size,
+      mimeType: primaryFile.mimeType,
+      source: primaryFile.source === "google-drive"
+        ? "google-drive"
+        : primaryFile.source === "manual-upload"
+          ? "upload"
+          : "input-folder",
+      sourceId: primaryFile.source === "google-drive"
+        ? primaryFile.id.replace(/^drive:/, "")
+        : primaryFile.name,
+      tag: primaryFile.tag,
+    };
+
+    setReference(selectedReference);
+    setPromptMode("manual");
     setGeneratedImageUrl("");
     setGeneratedImageFilename("");
     setGeneratedImageModel("");
-
-    setPromptMode(
-      "manual",
-    );
-
+    setGeneratedImageProvider("");
+    setGeneratedImageSaved(false);
+    setGeneratedImageSaveMessage("");
+    setSocialDescriptions({});
+    setSocialDescriptionError("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
     setError("");
 
-
-    const extension =
-      file.name.includes(".")
-        ? `.${file.name
-            .split(".")
-            .pop()
-            ?.toLowerCase()}`
-        : "";
-
-
-    const selectedReference:
-      ReferenceData = {
-
-      type:
-        getReferenceType(
-          extension,
-          file.mimeType,
-        ),
-
-      name:
-        file.name,
-
-      url:
-        previewUrls[file.id] ||
-        resolveApiUrl(
-          file.url,
-        ),
-
-      size:
-        file.size,
-
-      mimeType:
-        file.mimeType,
-
-      source:
-        file.source ===
-        "google-drive"
-          ? "google-drive"
-          : file.source ===
-              "manual-upload"
-            ? "upload"
-            : "input-folder",
-
-      /*
-       * Keep the real backend source separate from `url`.
-       * `url` is allowed to be a blob URL for the browser preview,
-       * but template generation needs the Drive file ID/name.
-       */
-      sourceId:
-        file.source === "google-drive"
-          ? file.id.replace(/^drive:/, "")
-          : file.name,
-
-      tag:
-        file.tag,
-    };
-
-
-    setReference(
-      selectedReference,
-    );
-
-
-    void generateTemplateForReference(
-      selectedReference,
-    );
+    // Template generation is disabled. Selected references are passed
+    // directly to image generation and addressed by their numbers.
+    setTemplateResult(null);
+    setTemplateApiProvider("");
+    setTemplateApiModel("");
   }
 
 
@@ -2400,7 +2446,8 @@ function ImageGenerator({
 
               body:
                 formData,
-            },
+            credentials: "include",
+          },
           );
 
 
@@ -2417,9 +2464,9 @@ function ImageGenerator({
         }
 
 
-        setSelectedInputId(
+        setSelectedInputIds([
           data.id,
-        );
+        ]);
 
 
         setTemplateResult(
@@ -2466,9 +2513,7 @@ function ImageGenerator({
         );
 
 
-        void generateTemplateForReference(
-          uploadedReference,
-        );
+        // Template generation is temporarily disabled.
 
 
         await loadInputFiles();
@@ -2519,9 +2564,7 @@ function ImageGenerator({
       );
 
 
-    setSelectedInputId(
-      "",
-    );
+    setSelectedInputIds([]);
 
     setTemplateResult(
       null,
@@ -2646,9 +2689,7 @@ function ImageGenerator({
 
     setUrlError("");
 
-    setSelectedInputId(
-      "",
-    );
+    setSelectedInputIds([]);
 
     setTemplateResult(
       null,
@@ -2733,9 +2774,7 @@ function ImageGenerator({
     );
 
 
-    void generateTemplateForReference(
-      externalReference,
-    );
+    // Template generation is temporarily disabled.
 
 
     setExternalUrl(
@@ -2758,49 +2797,7 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-  function handleRemoveReference() {
-
-    if (
-      reference?.source ===
-        "upload" &&
-      reference.url.startsWith(
-        "blob:",
-      )
-    ) {
-
-      URL.revokeObjectURL(
-        reference.url,
-      );
-    }
-
-
-    setReference(
-      null,
-    );
-
-    setSelectedInputId(
-      "",
-    );
-
-    setTemplatePrompt(
-      "",
-    );
-
-    setPromptMode(
-      "manual",
-    );
-
-    setTemplateResult(
-      null,
-    );
-
-    setGeneratedImageUrl("");
-    setGeneratedImageFilename("");
-    setGeneratedImageModel("");
-
-    setError("");
-  }
-
+  
 
   /*
    * ------------------------------------------------------------
@@ -2811,6 +2808,13 @@ function ImageGenerator({
   async function generateTemplateForReference(
     currentReference: ReferenceData,
   ) {
+
+    if (selectedApiKeys.length === 0) {
+      setTemplateResult(null);
+      setTemplateApiProvider("");
+      setTemplateApiModel("");
+      return;
+    }
 
     if (
       currentReference.type ===
@@ -2911,120 +2915,27 @@ function ImageGenerator({
 
   /*
    * ------------------------------------------------------------
+   * Template generation temporarily disabled
+   * ------------------------------------------------------------
+   * Keep the existing template state/functions in place so the feature
+   * can be re-enabled later, but do not invoke the template-generation
+   * pipeline anywhere in the current flow.
+   */
+
+
+  /*
+   * ------------------------------------------------------------
    * Generate AI prompt
    * ------------------------------------------------------------
    */
 
-  async function handleGeneratePrompt() {
-
-    if (!reference) {
-
-      setError(
-        "Please select a reference first.",
-      );
-
-      return;
-    }
-
-
-    if (
-      reference.type ===
-        "pdf" ||
-      reference.type ===
-        "video"
-    ) {
-
-      setError(
-        "AI prompt generation currently supports images, GIFs, image URLs and YouTube URLs.",
-      );
-
-      return;
-    }
-
-
-    setError("");
-
-    setIsGeneratingPrompt(
-      true,
-    );
+  function handleGeneratePrompt() {
+    setIsGeneratingPrompt(false);
+    setPromptMode("manual");
     setPromptApiProvider("");
     setPromptApiModel("");
-
-
-    try {
-
-      const sourceType =
-        reference.source === "google-drive"
-          ? "google-drive"
-          : reference.source === "upload"
-            ? "upload"
-            : reference.source === "input-folder"
-              ? "input-folder"
-              : "external-url";
-
-      const source = reference.sourceId || reference.url;
-      if (!source || source.startsWith("blob:")) {
-        throw new Error("The selected reference is not available to the backend.");
-      }
-
-      const formData = new FormData();
-      formData.append("source_type", sourceType);
-      formData.append("source", source);
-      formData.append("filename", reference.name);
-      formData.append("content_type", reference.mimeType || "");
-
-      const promptResponse = await fetch(
-        `${API_BASE_URL}/api/prompts/generate`,
-        { method: "POST", body: formData },
-      );
-      const promptData = await promptResponse.json().catch(() => null);
-
-      if (!promptResponse.ok) {
-        throw new Error(
-          String(promptData?.detail || "Unable to generate a prompt with AI."),
-        );
-      }
-
-      const generatedPrompt = String(promptData?.prompt || "").trim();
-      if (!generatedPrompt) {
-        throw new Error("The selected API returned an empty prompt.");
-      }
-
-      setPromptApiProvider(String(promptData?.provider || ""));
-      setPromptApiModel(String(promptData?.model || ""));
-
-
-      setTemplatePrompt(
-        generatedPrompt,
-      );
-
-
-      setPromptMode(
-        "ai",
-      );
-
-    } catch (err) {
-
-      console.error(
-        "AI prompt generation failed:",
-        err,
-      );
-
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to generate a prompt with AI.",
-      );
-
-    } finally {
-
-      setIsGeneratingPrompt(
-        false,
-      );
-    }
+    setError("AI prompt generation is temporarily disabled. Enter the content prompt manually.");
   }
-
 
   /*
    * ------------------------------------------------------------
@@ -3032,24 +2943,16 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
+  // AI template generation and AI prompt generation are intentionally disabled for now.
+  // Keep the existing functions above intact for future re-enablement without executing them.
+  void generateTemplateForReference;
+  void handleGeneratePrompt;
+  void isGeneratingPrompt;
+
   async function handleGenerateImage() {
 
-    if (!reference) {
-
-      setError(
-        "Please select a reference image first.",
-      );
-
-      return;
-    }
-
-
-    if (!templateResult) {
-
-      setError(
-        "Generate the template before generating the output image.",
-      );
-
+    if (selectedInputIds.length === 0 || !reference) {
+      setError("Please select at least one reference image.");
       return;
     }
 
@@ -3079,13 +2982,20 @@ function ImageGenerator({
 
 
     setError("");
+    setPromptMode("manual");
     setGeneratedImageUrl("");
     setGeneratedImageFilename("");
     setGeneratedImageModel("");
     setGeneratedImageProvider("");
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
+    setIsOutputFolderPickerOpen(false);
     setGeneratedTextChanges({});
+    setSocialDescriptions({});
+    setSocialDescriptionError("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
     setIsGeneratingImage(true);
 
 
@@ -3151,16 +3061,41 @@ function ImageGenerator({
         reference.mimeType || "",
       );
 
+      const selectedReferences = selectedInputIds
+        .map((id) => {
+          const file = inputFiles.find((item) => item.id === id);
+          if (!file) return null;
+          return {
+            number: getDriveReferenceNumber(file) ?? (selectedInputIds.indexOf(id) + 1),
+            source_type: file.source === "google-drive"
+              ? "google-drive"
+              : file.source === "manual-upload"
+                ? "upload"
+                : "input-folder",
+            source: file.source === "google-drive"
+              ? file.id.replace(/^drive:/, "")
+              : file.name,
+            filename: file.name,
+            content_type: file.mimeType || "",
+          };
+        })
+        .filter(Boolean);
+
+      formData.append(
+        "references_json",
+        JSON.stringify(selectedReferences),
+      );
+
       formData.append(
         "prompt",
         templatePrompt.trim(),
       );
 
+      // Template generation is disabled for now. The backend accepts an
+      // empty template context and uses the reference image + manual prompt.
       formData.append(
         "template_json",
-        JSON.stringify(
-          templateResult.template,
-        ),
+        "{}",
       );
 
 
@@ -3172,6 +3107,7 @@ function ImageGenerator({
               "POST",
             body:
               formData,
+          credentials: "include",
           },
         );
 
@@ -3256,6 +3192,136 @@ function ImageGenerator({
         false,
       );
     }
+  }
+
+
+  async function handleGenerateSocialDescriptions() {
+    if (!generatedImageFilename) {
+      setSocialDescriptionError("Generate the final image before creating social-media descriptions.");
+      return;
+    }
+
+    setIsGeneratingSocialDescriptions(true);
+    setSocialDescriptionError("");
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
+
+    try {
+      // The backend keeps the description stage separate from image generation
+      // and returns the generated TXT content.  Use the existing endpoint so
+      // the previous image-generation flow remains untouched.
+      const formData = new FormData();
+      formData.append("filename", generatedImageFilename);
+      formData.append("prompt", templatePrompt.trim());
+      formData.append(
+        "template_json",
+        JSON.stringify(templateResult?.template || {}),
+      );
+
+      const response = await fetch(`${API_BASE_URL}/api/social-media/generate`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(data?.detail || "Unable to generate social-media descriptions."));
+      }
+
+      const rawContent = String(data?.content || "").trim();
+      const limits: Record<string, number> = {
+        "[LINKEDIN]": 3000,
+        "[X / TWITTER]": 280,
+        "[FACEBOOK]": 10000,
+        "[INSTAGRAM]": 2200,
+      };
+      const headings = Object.keys(limits);
+      const parsed: Record<string, { text: string; character_count: number; character_limit: number }> = {};
+      headings.forEach((heading, index) => {
+        const start = rawContent.indexOf(heading);
+        if (start < 0) return;
+        const contentStart = start + heading.length;
+        const nextPositions = headings
+          .slice(index + 1)
+          .map((nextHeading) => rawContent.indexOf(nextHeading, contentStart))
+          .filter((position) => position >= 0);
+        const end = nextPositions.length ? Math.min(...nextPositions) : rawContent.length;
+        const text = rawContent.slice(contentStart, end).trim();
+        const platform = heading
+          .replace(/^\[|\]$/g, "")
+          .replace("X / TWITTER", "X / Twitter")
+          .replace("LINKEDIN", "LinkedIn")
+          .replace("FACEBOOK", "Facebook")
+          .replace("INSTAGRAM", "Instagram");
+        parsed[platform] = {
+          text,
+          character_count: text.length,
+          character_limit: limits[heading],
+        };
+      });
+
+      if (!Object.keys(parsed).length) {
+        throw new Error("The selected API did not return recognizable social-media sections.");
+      }
+
+      setSocialDescriptions(parsed);
+      setIsSocialDescriptionPreviewOpen(false);
+    } catch (err) {
+      console.error("Social-media description generation failed:", err);
+      setSocialDescriptionError(
+        err instanceof Error ? err.message : "Unable to generate social-media descriptions.",
+      );
+    } finally {
+      setIsGeneratingSocialDescriptions(false);
+    }
+  }
+
+  async function handleSaveSocialDescriptionsToDrive() {
+    if (!generatedImageFilename || Object.keys(socialDescriptions).length === 0 || isSavingSocialDescriptions) {
+      return;
+    }
+
+    setIsSavingSocialDescriptions(true);
+    setSocialDescriptionError("");
+    setSocialDescriptionSaveMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("filename", `${generatedImageFilename.replace(/\.[^.]+$/, "")}_description.txt`);
+      const response = await fetch(`${API_BASE_URL}/api/social-media/save-to-drive`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(data?.detail || "Unable to save social-media descriptions."));
+      }
+      setSocialDescriptionSaved(true);
+      setSocialDescriptionSaveMessage(
+        String(data?.message || "Social-media descriptions saved to Google Drive / outputs."),
+      );
+    } catch (err) {
+      console.error("Saving social-media descriptions failed:", err);
+      setSocialDescriptionError(
+        err instanceof Error ? err.message : "Unable to save social-media descriptions.",
+      );
+    } finally {
+      setIsSavingSocialDescriptions(false);
+    }
+  }
+
+  function getReferencePreviewColumns(count: number): number {
+    if (count <= 1) return 1;
+    if (count <= 4) return 2;
+    if (count <= 9) return 3;
+    return 4;
+  }
+
+  function getReferencePreviewHeight(count: number): number {
+    if (count <= 1) return 220;
+    if (count <= 4) return 170;
+    if (count <= 9) return 135;
+    return 110;
   }
 
 
@@ -3372,15 +3438,34 @@ function ImageGenerator({
   const handleSaveGeneratedImageToDrive = async () => {
     if (!generatedImageFilename || isSavingGeneratedImage) return;
 
+    // First click on Save opens the folder picker. The actual upload only
+    // happens after the user chooses a folder and confirms.
+    if (!isOutputFolderPickerOpen) {
+      if (driveOutputFolders.length === 0) {
+        await loadDriveOutputFolders();
+      }
+      setGeneratedImageSaveMessage("");
+      setIsOutputFolderPickerOpen(true);
+      return;
+    }
+
+    if (!selectedOutputFolderId) {
+      setGeneratedImageSaveMessage(
+        "Select a Google Drive output folder before saving.",
+      );
+      return;
+    }
+
     setIsSavingGeneratedImage(true);
     setGeneratedImageSaveMessage("");
     try {
       const formData = new FormData();
       formData.append("filename", generatedImageFilename);
+      if (selectedOutputFolderId) formData.append("folder_id", selectedOutputFolderId);
 
       const response = await fetch(
         `${API_BASE_URL}/api/images/save-to-drive`,
-        { method: "POST", body: formData },
+        { method: "POST", body: formData, credentials: "include" },
       );
       const data = await response.json().catch(() => null);
 
@@ -3441,59 +3526,64 @@ function ImageGenerator({
 
           <div
             className="active-api-summary"
-            aria-label="Selected API services"
-            title={`${selectedApiServices.length} API service${selectedApiServices.length === 1 ? "" : "s"} selected`}
+            aria-label="Available API services. Click to select or deselect."
+            title="Select the API keys that may be used by the pipeline"
             style={{
               display: "flex",
               alignItems: "center",
               gap: "8px",
               flexWrap: "wrap",
-              maxWidth: "min(52vw, 560px)",
+              maxWidth: "min(58vw, 700px)",
               justifyContent: "flex-end",
             }}
           >
-            {selectedApiServices.length > 0 ? (
-              selectedApiServices.map((service) => (
-                <span
-                  key={service.id}
-                  className="active-api-service"
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "7px",
-                    padding: "6px 10px",
-                    borderRadius: "999px",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    background: "rgba(255,255,255,0.055)",
-                    whiteSpace: "nowrap",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    lineHeight: 1,
-                  }}
-                >
-                  <span
-                    aria-hidden="true"
+            {availableApiServices.length > 0 ? (
+              availableApiServices.map((service) => {
+                const selected = selectedApiKeys.includes(service.id);
+                return (
+                  <button
+                    key={service.id}
+                    type="button"
+                    className={`active-api-service ${selected ? "selected" : ""}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      const next = selected
+                        ? selectedApiKeys.filter((id) => id !== service.id)
+                        : [...selectedApiKeys, service.id];
+                      onApiSelectionChange(next);
+                    }}
                     style={{
-                      width: "22px",
-                      height: "22px",
                       display: "inline-flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      borderRadius: "50%",
-                      background: "rgba(255,255,255,0.10)",
+                      gap: "7px",
+                      padding: "6px 10px",
+                      borderRadius: "999px",
+                      border: selected
+                        ? "1px solid rgba(120, 180, 255, 0.95)"
+                        : "1px solid rgba(255,255,255,0.12)",
+                      background: selected
+                        ? "rgba(80, 140, 255, 0.18)"
+                        : "rgba(255,255,255,0.055)",
+                      boxShadow: selected
+                        ? "0 0 0 1px rgba(120, 180, 255, 0.22)"
+                        : "none",
+                      color: "inherit",
+                      whiteSpace: "nowrap",
                       fontSize: "12px",
-                      fontWeight: 800,
+                      fontWeight: 600,
+                      lineHeight: 1,
+                      cursor: "pointer",
                     }}
                   >
-                    {getApiServiceIcon(service.name, service.keyName, 18)}
-                  </span>
-                  <span>{service.name}</span>
-                </span>
-              ))
+                    <span aria-hidden="true">
+                      {getApiServiceIcon(service.name, service.keyName, 18)}
+                    </span>
+                    <span>{service.name}</span>
+                  </button>
+                );
+              })
             ) : (
-              <span>
-                APIs 0
-              </span>
+              <span>APIs 0</span>
             )}
           </div>
 
@@ -3504,6 +3594,14 @@ function ImageGenerator({
             onClick={onBackToApiSetup}
           >
             ← API Setup
+          </button>
+
+          <button
+            type="button"
+            className="header-button"
+            onClick={onBackToHome}
+          >
+            ⌂ Home
           </button>
 
           <button
@@ -3661,12 +3759,11 @@ function ImageGenerator({
                     <div>
 
                       <strong>
-                        Select reference
+                        Select reference images
                       </strong>
 
                       <span>
-                        Choose a reference from
-                        Google Drive or upload manually.
+                        Choose one or more images. Each Google Drive image has a number you can use in the prompt (for example: “Use 1 and 3”).
                       </span>
 
                     </div>
@@ -3728,7 +3825,7 @@ function ImageGenerator({
                           <label
                             key={file.id}
                             className={`reference-file-item ${
-                              selectedInputId === file.id
+                              selectedInputIds.includes(file.id)
                                 ? "selected"
                                 : ""
                             }`}
@@ -3736,12 +3833,47 @@ function ImageGenerator({
 
                             <input
                               type="checkbox"
-                              checked={selectedInputId === file.id}
+                              checked={selectedInputIds.includes(file.id)}
                               onChange={() =>
                                 handleReferenceSelection(file)
                               }
                               aria-label={`Select ${file.name} as reference`}
                             />
+
+                            {getDriveReferenceNumber(file) !== null && (
+                              <span
+                                className={`reference-image-number reference-preview-number-badge ${
+                                  selectedInputIds.includes(file.id)
+                                    ? "selected"
+                                    : ""
+                                }`}
+                                title={`Reference ${getDriveReferenceNumber(file)}`}
+                                style={{
+                                  minWidth: "32px",
+                                  height: "32px",
+                                  padding: "0 8px",
+                                  borderRadius: "10px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexShrink: 0,
+                                  fontWeight: 800,
+                                  fontSize: "14px",
+                                  border: selectedInputIds.includes(file.id)
+                                    ? "2px solid currentColor"
+                                    : "1px solid rgba(255,255,255,0.25)",
+                                  background: selectedInputIds.includes(file.id)
+                                    ? "rgba(99, 91, 255, 0.14)"
+                                    : "#ffffff",
+                                  color: selectedInputIds.includes(file.id)
+                                    ? "#4f46e5"
+                                    : "#5f6b7a",
+                                  boxSizing: "border-box",
+                                }}
+                              >
+                                {getDriveReferenceNumber(file)}
+                              </span>
+                            )}
 
                             <div className="reference-list-thumbnail">
 
@@ -3798,6 +3930,52 @@ function ImageGenerator({
                         ))}
 
                       </div>
+
+                      {selectedInputIds.length > 0 && (
+                        <div className="selected-reference-previews" style={{ marginTop: "14px", padding: "12px", borderRadius: "14px", border: "1px solid rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.025)" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+                            <strong>Selected reference previews</strong>
+                            <span style={{ fontSize: "12px", opacity: 0.7 }}>{selectedInputIds.length} selected</span>
+                          </div>
+                          <div
+                            className="reference-selected-preview-grid"
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: `repeat(${getReferencePreviewColumns(selectedInputIds.length)}, minmax(0, 1fr))`,
+                              gap: "10px",
+                              alignItems: "start",
+                            }}
+                          >
+                            {selectedInputIds.map((id) => {
+                              const selectedFile = inputFiles.find((item) => item.id === id);
+                              if (!selectedFile) return null;
+                              const number = getDriveReferenceNumber(selectedFile);
+                              return (
+                                <div
+                                  key={selectedFile.id}
+                                  className="selected-reference-preview-card"
+                                  style={{
+                                    position: "relative",
+                                    minWidth: 0,
+                                    overflow: "hidden",
+                                    borderRadius: "12px",
+                                    border: "1px solid rgba(99,91,255,0.28)",
+                                    background: "#ffffff",
+                                  }}
+                                >
+                                  <div style={{ position: "relative", width: "100%", height: `${getReferencePreviewHeight(selectedInputIds.length)}px`, overflow: "hidden", borderRadius: "10px", background: "#f5f7fb", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <img src={previewUrls[selectedFile.id] || resolveApiUrl(selectedFile.url)} alt={`Reference ${number ?? ""}: ${selectedFile.name}`} loading="eager" decoding="async" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                                    {number !== null && <span style={{ position: "absolute", top: "6px", left: "6px", minWidth: "27px", height: "27px", padding: "0 7px", borderRadius: "8px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "12px", background: "rgba(255,255,255,0.96)", color: "#4f46e5", border: "2px solid #635bff", boxShadow: "0 3px 10px rgba(79,70,229,0.18)" }}>{number}</span>}
+                                  </div>
+                                  <div title={selectedFile.name} style={{ marginTop: "5px", fontSize: "11px", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {number !== null ? `${number} · ` : ""}{selectedFile.name}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       <button
                         type="button"
@@ -3864,18 +4042,17 @@ function ImageGenerator({
                       <div>
 
                         <strong>
-                          Reference library
+                          Numbered reference library
                         </strong>
 
                         <span>
-                          Select another image without
-                          leaving the current preview.
+                          Select multiple reference images. Use their highlighted numbers in the prompt (for example: “Use 1 for layout and 3 for the logo”).
                         </span>
 
                       </div>
 
                       <span className="reference-count-pill">
-                        {inputFiles.length} available
+                        {inputFiles.filter((file) => file.source === "google-drive").length} Drive images · {selectedInputIds.length} selected
                       </span>
 
                     </div>
@@ -3933,7 +4110,7 @@ function ImageGenerator({
                             <label
                               key={file.id}
                               className={`reference-file-item ${
-                                selectedInputId === file.id
+                                selectedInputIds.includes(file.id)
                                   ? "selected"
                                   : ""
                               }`}
@@ -3941,14 +4118,49 @@ function ImageGenerator({
 
                               <input
                                 type="checkbox"
-                                checked={selectedInputId === file.id}
+                                checked={selectedInputIds.includes(file.id)}
                                 onChange={() =>
                                   handleReferenceSelection(file)
                                 }
                                 aria-label={`Select ${file.name} as reference`}
                               />
 
-                              <div className="reference-list-thumbnail">
+                              {getDriveReferenceNumber(file) !== null && (
+                              <span
+                                className={`reference-image-number ${
+                                  selectedInputIds.includes(file.id)
+                                    ? "selected"
+                                    : ""
+                                }`}
+                                title={`Reference ${getDriveReferenceNumber(file)}`}
+                                style={{
+                                  minWidth: "32px",
+                                  height: "32px",
+                                  padding: "0 8px",
+                                  borderRadius: "10px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexShrink: 0,
+                                  fontWeight: 800,
+                                  fontSize: "14px",
+                                  border: selectedInputIds.includes(file.id)
+                                    ? "2px solid currentColor"
+                                    : "1px solid rgba(255,255,255,0.25)",
+                                  background: selectedInputIds.includes(file.id)
+                                    ? "rgba(99, 91, 255, 0.14)"
+                                    : "#ffffff",
+                                  color: selectedInputIds.includes(file.id)
+                                    ? "#4f46e5"
+                                    : "#5f6b7a",
+                                  boxSizing: "border-box",
+                                }}
+                              >
+                                {getDriveReferenceNumber(file)}
+                              </span>
+                            )}
+
+                            <div className="reference-list-thumbnail">
 
                                 <img
                                   src={
@@ -4031,48 +4243,173 @@ function ImageGenerator({
 
                 <div className="reference-selected-preview-panel">
 
-                  <div className="selected-reference-preview">
-
-                    {renderReferencePreview(reference)}
-
-                    <div className="reference-type-label">
-                      {formatReferenceType(reference.type)}
+                  <div
+                    className="selected-reference-preview"
+                    style={{
+                      width: "100%",
+                    }}
+                  >
+                    <div
+                      className="reference-preview-panel-heading"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "10px",
+                        marginBottom: "10px",
+                      }}
+                    >
+                      <strong>
+                        Selected reference previews
+                      </strong>
+                      <span style={{ fontSize: "11px", opacity: 0.7 }}>
+                        {selectedInputIds.length} selected
+                      </span>
                     </div>
 
-                    {reference.tag && (
-                      <div className="reference-ai-tag">
-                        {reference.tag}
+                    {selectedInputIds.length > 0 ? (
+                      <div
+                        className="reference-selected-preview-grid"
+                        style={{
+                          width: "100%",
+                          display: "grid",
+                          gridTemplateColumns: `repeat(${getReferencePreviewColumns(selectedInputIds.length)}, minmax(0, 1fr))`,
+                          gap: "10px",
+                          alignItems: "start",
+                        }}
+                      >
+                        {selectedInputIds.map((id) => {
+                          const selectedFile = inputFiles.find(
+                            (item) => item.id === id,
+                          );
+                          if (!selectedFile) return null;
+
+                          const number = getDriveReferenceNumber(selectedFile);
+                          const previewUrl =
+                            previewUrls[selectedFile.id] ||
+                            resolveApiUrl(selectedFile.url);
+
+                          return (
+                            <div
+                              key={selectedFile.id}
+                              className="selected-reference-preview-card"
+                              style={{
+                                position: "relative",
+                                minWidth: 0,
+                                borderRadius: "12px",
+                                border: "1px solid rgba(120, 100, 255, 0.35)",
+                                background: "rgba(255,255,255,0.035)",
+                                padding: "8px",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                className="reference-preview-number-badge"
+                                style={{
+                                  position: "absolute",
+                                  top: "7px",
+                                  left: "7px",
+                                  zIndex: 3,
+                                  minWidth: "30px",
+                                  height: "30px",
+                                  padding: "0 8px",
+                                  borderRadius: "9px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  background: "#ffffff",
+                                  color: "#4f46e5",
+                                  fontWeight: 800,
+                                  fontSize: "13px",
+                                  boxShadow: "0 3px 12px rgba(0,0,0,0.25)",
+                                }}
+                              >
+                                {number ?? "•"}
+                              </div>
+
+                              <div
+                                style={{
+                                  width: "100%",
+                                  height: `${getReferencePreviewHeight(selectedInputIds.length)}px`,
+                                  borderRadius: "9px",
+                                  overflow: "hidden",
+                                  background: "rgba(255,255,255,0.04)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                <img
+                                  src={previewUrl}
+                                  alt={`Reference ${number ?? ""}: ${selectedFile.name}`}
+                                  loading="eager"
+                                  decoding="async"
+                                  style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "contain",
+                                    display: "block",
+                                  }}
+                                  onError={(event) => {
+                                    console.error(
+                                      "Selected reference preview failed:",
+                                      selectedFile.name,
+                                      selectedFile.url,
+                                    );
+                                    event.currentTarget.style.display = "none";
+                                  }}
+                                />
+                              </div>
+
+                              <div
+                                style={{
+                                  marginTop: "7px",
+                                  fontSize: "11px",
+                                  fontWeight: 700,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title={selectedFile.name}
+                              >
+                                {number != null ? `${number}. ` : ""}
+                                {selectedFile.name}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="reference-empty-list">
+                        Select one or more Google Drive images to preview them here.
                       </div>
                     )}
-
                   </div>
 
                   <div className="selected-reference-info">
-
                     <div>
-
                       <strong>
-                        {reference.name}
+                        {selectedInputIds.length > 0
+                          ? `${selectedInputIds.length} reference${selectedInputIds.length === 1 ? "" : "s"} selected`
+                          : "No references selected"}
                       </strong>
-
                       <span>
-                        {reference.source === "google-drive"
-                          ? "From Google Drive"
-                          : reference.source === "input-folder"
-                            ? "Manual upload"
-                            : "External reference"}
+                        Use the highlighted image numbers directly in your prompt.
                       </span>
-
                     </div>
 
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={handleRemoveReference}
-                    >
-                      Remove
-                    </button>
-
+                    {selectedInputIds.length > 0 && (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          setSelectedInputIds([]);
+                          setReference(null);
+                        }}
+                      >
+                        Clear Selection
+                      </button>
+                    )}
                   </div>
 
                 </div>
@@ -4145,8 +4482,8 @@ function ImageGenerator({
                     </h3>
 
                     <p>
-                      The selected reference used to
-                      build the template.
+                      All selected references are shown here.
+                      Their highlighted numbers can be used in the prompt.
                     </p>
 
                   </div>
@@ -4157,7 +4494,132 @@ function ImageGenerator({
                 <div className="template-reference-frame">
 
 
-                  {reference ? (
+                  {selectedInputIds.length > 0 ? (
+
+                    <div
+                      className="selected-reference-preview-grid"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        minHeight: "240px",
+                        display: "grid",
+                        gridTemplateColumns: `repeat(${getReferencePreviewColumns(selectedInputIds.length)}, minmax(0, 1fr))`,
+                        gap: "10px",
+                        padding: "10px",
+                        overflowY: "auto",
+                        alignContent: "start",
+                      }}
+                    >
+                      {selectedInputIds.map((id) => {
+                        const selectedFile = inputFiles.find(
+                          (item) => item.id === id,
+                        );
+                        if (!selectedFile) return null;
+
+                        const number =
+                          getDriveReferenceNumber(selectedFile);
+                        const previewUrl =
+                          previewUrls[selectedFile.id] ||
+                          resolveApiUrl(selectedFile.url);
+
+                        const selectedReference: ReferenceData = {
+                          type: getReferenceType(
+                            selectedFile.name.includes(".")
+                              ? `.${selectedFile.name.split(".").pop()?.toLowerCase()}`
+                              : "",
+                            selectedFile.mimeType,
+                          ),
+                          name: selectedFile.name,
+                          url: previewUrl,
+                          size: selectedFile.size,
+                          mimeType: selectedFile.mimeType,
+                          source:
+                            selectedFile.source === "google-drive"
+                              ? "google-drive"
+                              : selectedFile.source === "manual-upload"
+                                ? "upload"
+                                : "input-folder",
+                          sourceId:
+                            selectedFile.source === "google-drive"
+                              ? selectedFile.id.replace(/^drive:/, "")
+                              : selectedFile.name,
+                          tag: selectedFile.tag,
+                        };
+
+                        return (
+                          <div
+                            key={selectedFile.id}
+                            className="selected-reference-preview-card"
+                            style={{
+                              position: "relative",
+                              minWidth: 0,
+                              borderRadius: "12px",
+                              border: "2px solid currentColor",
+                              overflow: "hidden",
+                              background: "rgba(255,255,255,0.035)",
+                              minHeight: "150px",
+                            }}
+                          >
+                            <div
+                              className="reference-preview-number-badge"
+                              style={{
+                                position: "absolute",
+                                top: "7px",
+                                left: "7px",
+                                zIndex: 3,
+                                minWidth: "28px",
+                                height: "28px",
+                                padding: "0 7px",
+                                borderRadius: "9px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontWeight: 800,
+                                fontSize: "13px",
+                                background: "rgba(255,255,255,0.96)",
+                                color: "#4f46e5",
+                                border: "2px solid #635bff",
+                                boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+                              }}
+                            >
+                              {number ?? selectedInputIds.indexOf(id) + 1}
+                            </div>
+
+                            <div
+                              style={{
+                                width: "100%",
+                                height: `${getReferencePreviewHeight(selectedInputIds.length)}px`,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {renderReferencePreview(
+                                selectedReference,
+                              )}
+                            </div>
+
+                            <div
+                              title={selectedFile.name}
+                              style={{
+                                padding: "7px 9px",
+                                fontSize: "11px",
+                                lineHeight: 1.2,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                borderTop: "1px solid rgba(255,255,255,0.08)",
+                              }}
+                            >
+                              {number ?? selectedInputIds.indexOf(id) + 1}. {selectedFile.name}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                  ) : reference ? (
 
                     <div className="fixed-reference-preview">
 
@@ -4275,10 +4737,8 @@ function ImageGenerator({
 
                         {
                           isGeneratingTemplate
-                            ? "Creating template..."
-                            : templateResult
-                              ? templateResult.template_name
-                              : "Template structure"
+                            ? "Template generation disabled"
+                            : "Template generation disabled"
                         }
 
                       </h3>
@@ -4286,11 +4746,8 @@ function ImageGenerator({
 
                       <p>
 
-                        {
-                          isGeneratingTemplate
-                            ? "Analyzing the reference and extracting its visual structure."
-                            : "A reusable structure generated automatically from the reference."
-                        }
+                        Template generation is temporarily disabled. Image generation uses the selected reference directly.
+
 
                       </p>
 
@@ -4622,14 +5079,11 @@ function ImageGenerator({
                     </div>
 
                     <strong>
-                      Add a reference to generate a
-                      template
+                      Template generation is temporarily disabled
                     </strong>
 
                     <span>
-                      The template is created
-                      automatically as soon as a
-                      reference is selected.
+                      The selected reference will be used directly for image generation.
                     </span>
 
                   </div>
@@ -4641,7 +5095,7 @@ function ImageGenerator({
             </div>
 
 
-            {templateResult && (
+            {false && templateResult && (
               <div className="generated-output-meta" style={{ marginTop: "16px" }}>
                 <span>API Provider</span>
                 <strong>{templateApiProvider || "Selected API"}</strong>
@@ -4651,7 +5105,7 @@ function ImageGenerator({
             )}
 
 
-            {templateResult && (
+            {false && templateResult && (
               <div className="template-editable-section">
 
                 <div className="template-structure-heading">
@@ -4669,10 +5123,9 @@ function ImageGenerator({
                   </span>
                 </div>
 
-                {templateResult.template.text_groups &&
-                templateResult.template.text_groups.length > 0 ? (
+                {(templateResult?.template?.text_groups ?? []).length > 0 ? (
                   <div className="editable-text-list">
-                    {(Array.isArray(templateResult.template.text_groups) ? templateResult.template.text_groups : []).map((group) => (
+                    {(templateResult?.template?.text_groups ?? []).map((group) => (
                       <div
                         key={group.id}
                         className="editable-text-item"
@@ -4694,10 +5147,9 @@ function ImageGenerator({
                       </div>
                     ))}
                   </div>
-                ) : templateResult.template.text_elements &&
-                  templateResult.template.text_elements.length > 0 ? (
+                ) : (templateResult?.template?.text_elements ?? []).length > 0 ? (
                   <div className="editable-text-list">
-                    {(Array.isArray(templateResult.template.text_elements) ? templateResult.template.text_elements : []).map((element) => (
+                    {(templateResult?.template?.text_elements ?? []).map((element) => (
                       <div
                         key={element.id}
                         className="editable-text-item"
@@ -4791,19 +5243,15 @@ function ImageGenerator({
                         promptMode ===
                         "ai"
                       }
+                      disabled
                       onChange={() => {
-
-                        setPromptMode(
-                          "ai",
-                        );
-
-                        setError("");
-
+                        setPromptMode("manual");
+                        setError("AI prompt generation is temporarily disabled.");
                       }}
                     />
 
                     <span>
-                      Generate with AI
+                      Generate with AI (Disabled)
                     </span>
 
                   </label>
@@ -4813,55 +5261,29 @@ function ImageGenerator({
               </div>
 
 
-              {promptMode ===
-                "ai" && (
+              <div className="ai-prompt-panel">
 
-                <div className="ai-prompt-panel">
+                <div className="ai-prompt-panel-text">
 
+                  <strong>
+                    AI Prompt Generation Disabled
+                  </strong>
 
-                  <div className="ai-prompt-panel-text">
-
-                    <strong>
-                      AI Prompt Generator
-                    </strong>
-
-                    <span>
-                      Gemini will analyze the
-                      selected reference and create
-                      a content-change prompt that
-                      keeps the template design fixed.
-                    </span>
-
-                  </div>
-
-
-                  <button
-                    type="button"
-                    className="ai-prompt-button"
-                    disabled={
-                      !reference ||
-                      isGeneratingPrompt ||
-                      reference.type ===
-                        "pdf" ||
-                      reference.type ===
-                        "video"
-                    }
-                    onClick={
-                      handleGeneratePrompt
-                    }
-                  >
-
-                    {
-                      isGeneratingPrompt
-                        ? "Generating Prompt..."
-                        : "Generate Prompt with AI"
-                    }
-
-                  </button>
+                  <span>
+                    AI will not generate the prompt for now. Enter your content-change prompt manually below.
+                  </span>
 
                 </div>
 
-              )}
+                <button
+                  type="button"
+                  className="ai-prompt-button"
+                  disabled
+                >
+                  AI Prompt Disabled
+                </button>
+
+              </div>
 
 
               {promptApiProvider && (
@@ -4888,18 +5310,13 @@ function ImageGenerator({
                       .value,
                   )
                 }
-                placeholder={
-                  promptMode ===
-                  "ai"
-                    ? "Generated content-change prompt will appear here. You can edit it before generating the final image."
-                    : "Describe which poster text or content should change while keeping the reference design..."
-                }
+                placeholder="Describe which poster text or content should change while keeping the reference design..."
                 rows={6}
               />
 
 
               <div className="template-helper">
-                Reference Design + Content Changes → Final Image
+                Use the highlighted Google Drive reference numbers directly in your prompt. Example: “Use 1 for the layout, 3 for the logo, and 5 for the color style.”
               </div>
 
             </div>
@@ -4953,8 +5370,8 @@ function ImageGenerator({
                   </strong>
 
                   <span>
-                    {reference
-                      ? reference.name
+                    {selectedInputIds.length > 0
+                      ? `${selectedInputIds.length} reference image${selectedInputIds.length === 1 ? "" : "s"} selected`
                       : "Not selected"}
                   </span>
                 </div>
@@ -4974,13 +5391,11 @@ function ImageGenerator({
 
                 <div>
                   <strong>
-                    Generated Template
+                    Template Generation
                   </strong>
 
                   <span>
-                    {templateResult
-                      ? templateResult.template_name
-                      : "Not generated"}
+                    Temporarily disabled
                   </span>
                 </div>
 
@@ -5018,8 +5433,8 @@ function ImageGenerator({
               type="button"
               className="generate-button"
               disabled={
+                selectedInputIds.length === 0 ||
                 !reference ||
-                !templateResult ||
                 !templatePrompt.trim() ||
                 isGeneratingImage
               }
@@ -5045,9 +5460,8 @@ function ImageGenerator({
                   </strong>
 
                   <span>
-                    Gemini is identifying the text changes, then the
-                    template renderer applies them to the original
-                    reference without redrawing the poster.
+                    The selected image-capable API is applying your manual
+                    content prompt to the original reference image.
                   </span>
                 </div>
 
@@ -5177,18 +5591,145 @@ function ImageGenerator({
 
                 )}
 
+                                {isOutputFolderPickerOpen && (
+                  <div
+                    style={{
+                      marginTop: "16px",
+                      padding: "14px",
+                      borderRadius: "12px",
+                      border: "1px solid rgba(120, 100, 255, 0.35)",
+                      background: "rgba(255,255,255,0.035)",
+                    }}
+                  >
+                    <label
+                      htmlFor="output-drive-folder"
+                      style={{
+                        display: "block",
+                        marginBottom: "8px",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Select Google Drive output folder
+                    </label>
+
+                    {driveOutputFolders.length > 0 ? (
+                      <>
+                        <select
+                          id="output-drive-folder"
+                          value={selectedOutputFolderId}
+                          onChange={(event) => {
+                            setSelectedOutputFolderId(event.target.value);
+                            setGeneratedImageSaved(false);
+                            setGeneratedImageSaveMessage("");
+                          }}
+                          disabled={isSavingGeneratedImage}
+                          style={{
+                            width: "100%",
+                            padding: "11px 12px",
+                            borderRadius: "10px",
+                            border: "1px solid rgba(255,255,255,0.14)",
+                            background: "rgba(255,255,255,0.05)",
+                            color: "inherit",
+                            font: "inherit",
+                          }}
+                        >
+                          <option value="">
+                            Select a configured Google Drive folder
+                          </option>
+                          {driveOutputFolders.map((folder, index) => (
+                            <option key={folder.id} value={folder.id}>
+                              {folder.name || `Google Drive ${index + 1}`}
+                            </option>
+                          ))}
+                        </select>
+
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: "7px",
+                            fontSize: "12px",
+                            opacity: 0.7,
+                          }}
+                        >
+                          The generated image will be saved inside an{" "}
+                          <strong>outputs</strong> subfolder of the selected
+                          folder. These folders come from the uploaded API key
+                          configuration.
+                        </span>
+
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            marginTop: "12px",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="primary-button"
+                            onClick={handleSaveGeneratedImageToDrive}
+                            disabled={
+                              isSavingGeneratedImage ||
+                              generatedImageSaved ||
+                              !selectedOutputFolderId
+                            }
+                          >
+                            {isSavingGeneratedImage
+                              ? "Saving..."
+                              : generatedImageSaved
+                                ? "Saved to Google Drive / outputs"
+                                : "Confirm Save"}
+                          </button>
+
+                          {!isSavingGeneratedImage && !generatedImageSaved && (
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => {
+                                setIsOutputFolderPickerOpen(false);
+                                setGeneratedImageSaveMessage("");
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <p style={{ margin: 0, opacity: 0.75 }}>
+                          No output Google Drive folders were configured in the
+                          uploaded API key file.
+                        </p>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => setIsOutputFolderPickerOpen(false)}
+                          style={{ marginTop: "10px" }}
+                        >
+                          Close
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button
                   type="button"
                   className="primary-button"
                   onClick={handleSaveGeneratedImageToDrive}
-                  disabled={isSavingGeneratedImage || generatedImageSaved}
+                  disabled={
+                    isSavingGeneratedImage ||
+                    generatedImageSaved
+                  }
                   style={{ marginTop: 16 }}
                 >
                   {isSavingGeneratedImage
                     ? "Saving to Google Drive..."
                     : generatedImageSaved
                       ? "Saved to Google Drive / outputs"
-                      : "Save to Google Drive"}
+                      : "Save"}
                 </button>
 
                 {generatedImageSaveMessage && (
@@ -5196,6 +5737,78 @@ function ImageGenerator({
                     {generatedImageSaveMessage}
                   </p>
                 )}
+
+
+                {/* ======================================================
+                    SOCIAL MEDIA DESCRIPTION — post-image stage only
+                    ====================================================== */}
+                <div className="social-description-section">
+                  <div className="social-description-header">
+                    <div>
+                      <span className="social-description-kicker">NEXT STEP</span>
+                      <h3>Social Media Descriptions</h3>
+                      <p>
+                        Generate platform-specific post text from the final image. Each description is kept within the configured platform character limit.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="social-description-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleGenerateSocialDescriptions}
+                      disabled={isGeneratingSocialDescriptions}
+                    >
+                      {isGeneratingSocialDescriptions ? "Generating Descriptions..." : "Generate Description"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setIsSocialDescriptionPreviewOpen(true)}
+                      disabled={Object.keys(socialDescriptions).length === 0}
+                    >
+                      Preview
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleSaveSocialDescriptionsToDrive}
+                      disabled={
+                        Object.keys(socialDescriptions).length === 0 ||
+                        isSavingSocialDescriptions ||
+                        socialDescriptionSaved
+                      }
+                    >
+                      {isSavingSocialDescriptions
+                        ? "Saving..."
+                        : socialDescriptionSaved
+                          ? "Saved to Google Drive / outputs"
+                          : "Save Description"}
+                    </button>
+                  </div>
+
+                  {socialDescriptionError && (
+                    <p className="social-description-error">{socialDescriptionError}</p>
+                  )}
+
+                  {socialDescriptionSaveMessage && (
+                    <p className="social-description-success">{socialDescriptionSaveMessage}</p>
+                  )}
+
+                  {Object.keys(socialDescriptions).length > 0 && (
+                    <div className="social-description-summary">
+                      {Object.entries(socialDescriptions).map(([platform, item]) => (
+                        <div className="social-description-summary-item" key={platform}>
+                          <strong>{platform}</strong>
+                          <span>{item.character_count} / {item.character_limit} characters</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
               </div>
 
@@ -5232,6 +5845,44 @@ function ImageGenerator({
 
       </main>
 
+
+      {isSocialDescriptionPreviewOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => setIsSocialDescriptionPreviewOpen(false)}
+        >
+          <div
+            className="social-description-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <div className="section-kicker">PREVIEW</div>
+                <h2>Social Media Descriptions</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setIsSocialDescriptionPreviewOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="social-description-preview-list">
+              {Object.entries(socialDescriptions).map(([platform, item]) => (
+                <article className="social-description-preview-card" key={platform}>
+                  <div className="social-description-preview-heading">
+                    <strong>{platform}</strong>
+                    <span>{item.character_count} / {item.character_limit} characters</span>
+                  </div>
+                  <p>{item.text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================
           REFERENCE MODAL
@@ -5460,6 +6111,7 @@ interface AppSessionState {
   apiSetupComplete: boolean;
   selectedApiKeys: string[];
   selectedApiServices: SelectedApiService[];
+  availableApiServices: SelectedApiService[];
 }
 
 
@@ -5468,6 +6120,7 @@ function readAppSession(): AppSessionState {
     apiSetupComplete: false,
     selectedApiKeys: [],
     selectedApiServices: [],
+    availableApiServices: [],
   };
 
   try {
@@ -5492,6 +6145,22 @@ function readAppSession(): AppSessionState {
               (value): value is string =>
                 typeof value === "string",
             )
+          : [],
+      availableApiServices:
+        Array.isArray(parsed.availableApiServices)
+          ? parsed.availableApiServices
+              .filter(
+                (service): service is SelectedApiService =>
+                  Boolean(service) &&
+                  typeof service === "object" &&
+                  typeof (service as SelectedApiService).id === "string" &&
+                  typeof (service as SelectedApiService).name === "string",
+              )
+              .map((service) => ({
+                id: service.id,
+                name: service.name,
+                keyName: service.keyName,
+              }))
           : [],
       selectedApiServices:
         Array.isArray(parsed.selectedApiServices)
@@ -5533,6 +6202,8 @@ function writeAppSession(
           state.selectedApiKeys,
         selectedApiServices:
           state.selectedApiServices,
+        availableApiServices:
+          state.availableApiServices,
       }),
     );
   } catch (error) {
@@ -5542,6 +6213,7 @@ function writeAppSession(
     );
   }
 }
+
 
 
 /* ========================= HOME PAGE ========================= */
@@ -5751,9 +6423,8 @@ function ContentGeneratorHome() {
 }
 
 
-
-
 function App() {
+
   const normalizePath = (path: string) =>
     path.replace(/\/+$/, "") || "/";
 
@@ -5785,13 +6456,16 @@ function App() {
   const [selectedApiServices, setSelectedApiServices] =
     useState<SelectedApiService[]>(initialAppSession.selectedApiServices);
 
+  const [availableApiServices, setAvailableApiServices] =
+    useState<SelectedApiService[]>(initialAppSession.availableApiServices);
+
+  // Keep Home, API Setup and Image Generator mounted so navigation between
+  // them does not destroy the current Image Generator work in progress.
   const navigateTo = (path: string) => {
     const normalized = normalizePath(path);
-
     if (normalizePath(window.location.pathname) !== normalized) {
       window.history.pushState({}, "", normalized);
     }
-
     setCurrentPath(normalized);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -5808,11 +6482,13 @@ function App() {
       apiSetupComplete,
       selectedApiKeys,
       selectedApiServices,
+      availableApiServices,
     });
   }, [
     apiSetupComplete,
     selectedApiKeys,
     selectedApiServices,
+    availableApiServices,
   ]);
 
   if (currentPath === "/content-generator") {
@@ -5826,6 +6502,7 @@ function App() {
     return <ProjectManager />;
   }
 
+  // Unknown paths return to the home workspace.
   const safeHome =
     currentPath !== "/" &&
     currentPath !== "/api-setup" &&
@@ -5834,9 +6511,7 @@ function App() {
   return (
     <>
       <div
-        style={{
-          display: showHome || safeHome ? "block" : "none",
-        }}
+        style={{ display: showHome || safeHome ? "block" : "none" }}
         aria-hidden={!(showHome || safeHome)}
       >
         <HomePage
@@ -5846,16 +6521,30 @@ function App() {
       </div>
 
       <div
-        style={{
-          display: showApiSetup ? "block" : "none",
-        }}
+        style={{ display: showApiSetup ? "block" : "none" }}
         aria-hidden={!showApiSetup}
       >
         <ApiKeySetup
           onBackToHome={() => navigateTo("/")}
           onComplete={(selectedKeys, selectedServices) => {
-            setSelectedApiKeys(selectedKeys);
-            setSelectedApiServices(selectedServices);
+            void selectedKeys;
+            // Keep any API selections that are still present after returning
+            // from the Image Generator. If the uploaded API file changed,
+            // automatically discard only IDs that no longer exist.
+            const availableIds = new Set(
+              selectedServices.map((service) => service.id),
+            );
+            const validSelectedIds = selectedApiKeys.filter((id) =>
+              availableIds.has(id),
+            );
+
+            setSelectedApiKeys(validSelectedIds);
+            setSelectedApiServices(
+              selectedServices.filter((service) =>
+                validSelectedIds.includes(service.id),
+              ),
+            );
+            setAvailableApiServices(selectedServices);
             setApiSetupComplete(true);
             navigateTo("/image-generator");
           }}
@@ -5863,18 +6552,41 @@ function App() {
       </div>
 
       <div
-        style={{
-          display: showImageGenerator ? "block" : "none",
-        }}
+        style={{ display: showImageGenerator ? "block" : "none" }}
         aria-hidden={!showImageGenerator}
       >
         <ImageGenerator
           selectedApiKeys={selectedApiKeys}
           selectedApiServices={selectedApiServices}
-          onBackToApiSetup={() => {
-            setApiSetupComplete(false);
-            navigateTo("/api-setup");
+          availableApiServices={availableApiServices}
+          onApiSelectionChange={async (nextSelectedIds) => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/api/api-keys/select`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ selected_ids: nextSelectedIds }),
+                credentials: "include",
+              });
+
+              const data = await response.json().catch(() => null);
+              if (!response.ok) {
+                throw new Error(
+                  String(data?.detail || "Unable to update API selection."),
+                );
+              }
+
+              setSelectedApiKeys(nextSelectedIds);
+              setSelectedApiServices(
+                availableApiServices.filter((service) =>
+                  nextSelectedIds.includes(service.id),
+                ),
+              );
+            } catch (error) {
+              console.error("API selection update failed:", error);
+            }
           }}
+          onBackToApiSetup={() => navigateTo("/api-setup")}
+          onBackToHome={() => navigateTo("/")}
         />
       </div>
     </>
