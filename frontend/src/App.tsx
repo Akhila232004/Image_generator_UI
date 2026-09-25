@@ -13,12 +13,13 @@ import type {
 import "./App.css";
 
 import { generateTemplate } from "./services/templateService";
+import type {
+  GenerateTemplateResponse,
+} from "./services/templateService";
 
-// Kept only for legacy template-preview state; template generation is disabled in the UI.
-type GenerateTemplateResponse = any;
 
-
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL =
+  (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
 
 function resolveApiUrl(url: string): string {
@@ -347,7 +348,11 @@ function ApiKeySetup({
         );
       });
 
-      const displayKeys = keys.map((api) => {
+      const uniqueKeysById = Array.from(
+        new Map(keys.map((api) => [api.id, api])).values(),
+      );
+
+      const displayKeys = uniqueKeysById.map((api) => {
         const normalizedName =
           api.name.trim().toLowerCase();
         const total =
@@ -364,6 +369,14 @@ function ApiKeySetup({
 
 
       if (!displayKeys.length) {
+        throw new Error(
+          "No supported API keys were found in the uploaded file.",
+        );
+      }
+
+      setApiKeys(displayKeys);
+
+      if (!keys.length) {
         throw new Error(
           "No supported API keys were found in the uploaded file.",
         );
@@ -413,28 +426,97 @@ function ApiKeySetup({
   }
 
 
-  function handleContinue() {
+  async function handleContinue() {
     if (!apiKeys.length) {
       setError("Upload an API key file before continuing.");
       return;
     }
 
     setError("");
+    setIsSaving(true);
 
-    const selectedServices = apiKeys.map((api) => ({
-      id: api.id,
-      name: api.name,
-      keyName: api.keyName,
-    }));
+    try {
+      // Always derive the initial selection from the freshly uploaded keys.
+      // Do not reuse sessionStorage here: the backend upload response is the
+      // source of truth for this API Setup -> Image Generator transition.
+      const idsToSelect = Array.from(
+        new Set(
+          apiKeys
+            .map((api) => String(api.id || "").trim())
+            .filter(Boolean),
+        ),
+      );
 
-    // API Setup only uploads and lists credentials. API selection belongs
-    // exclusively to the Image Generator header. Start with all visible AI
-    // keys selected so the user can immediately generate, while still being
-    // able to deselect/reselect individual keys there.
-    onComplete(
-      apiKeys.map((api) => api.id),
-      selectedServices,
-    );
+      if (!idsToSelect.length) {
+        throw new Error(
+          "No valid AI API keys are available. Upload the API key file again.",
+        );
+      }
+
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/api-keys/select`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              // Start the Image Generator with all uploaded AI keys selected.
+              // The user can then deselect any key(s) from the header.
+              selected_ids: idsToSelect,
+              initial_setup: true,
+            }),
+            credentials: "include",
+          },
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to activate the selected APIs.",
+          ),
+        );
+      }
+
+      const selectedServices =
+        apiKeys.map((api) => ({
+          id: api.id,
+          name: api.name,
+          keyName: api.keyName,
+        }));
+
+      // Keep all uploaded AI keys selected initially. The Image Generator
+      // header still allows the user to select/deselect multiple keys.
+      onComplete(
+        idsToSelect,
+        selectedServices.filter((service) =>
+          idsToSelect.includes(service.id),
+        ),
+      );
+
+    } catch (err) {
+      console.error(
+        "API selection failed:",
+        err,
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to activate the selected APIs.",
+      );
+
+    } finally {
+      setIsSaving(false);
+    }
   }
 
 
@@ -1442,7 +1524,9 @@ function ImageGenerator({
     useState(false);
 
   const [templateResult, setTemplateResult] =
-    useState<GenerateTemplateResponse | null>(null);
+    useState<GenerateTemplateResponse | null>(
+      null,
+    );
 
   const [templateApiProvider, setTemplateApiProvider] =
     useState("");
@@ -1468,12 +1552,6 @@ function ImageGenerator({
   const [generatedImageProvider, setGeneratedImageProvider] =
     useState("");
 
-  const [generatedImageDescription, setGeneratedImageDescription] =
-    useState("");
-
-  const [isGeneratingDescription, setIsGeneratingDescription] =
-    useState(false);
-
   const [isSavingGeneratedImage, setIsSavingGeneratedImage] =
     useState(false);
 
@@ -1487,21 +1565,6 @@ function ImageGenerator({
   const [canvaDesignId, setCanvaDesignId] = useState("");
   const [isCreatingCanvaDesign, setIsCreatingCanvaDesign] = useState(false);
   const [canvaMessage, setCanvaMessage] = useState("");
-
-  // Post-image description feature. This is intentionally separate from
-  // template/prompt generation, which remains disabled.
-  type SocialDescriptionItem = {
-    text: string;
-    character_count: number;
-    character_limit: number;
-  };
-  const [socialDescriptions, setSocialDescriptions] =
-    useState<Record<string, SocialDescriptionItem>>({});
-  const [isGeneratingSocialDescriptions, setIsGeneratingSocialDescriptions] = useState(false);
-  const [socialDescriptionError, setSocialDescriptionError] = useState("");
-  const [socialDescriptionSaved, setSocialDescriptionSaved] = useState(false);
-  const [socialDescriptionSaveMessage, setSocialDescriptionSaveMessage] = useState("");
-  const [isSocialDescriptionPreviewOpen, setIsSocialDescriptionPreviewOpen] = useState(false);
 
   const [driveOutputFolders, setDriveOutputFolders] = useState<DriveOutputFolder[]>([]);
   const [selectedOutputFolderId, setSelectedOutputFolderId] = useState("");
@@ -2165,9 +2228,22 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-  // Automatic AI tagging is intentionally disabled.
-  // Reference loading must not depend on API-key selection, and loading
-  // Google Drive references must never trigger /api/inputs/tag-all.
+  useEffect(() => {
+    // Do not call the AI tagging endpoint until at least one AI API key
+    // has been selected. API selection is the source of truth for the
+    // complete AI pipeline.
+    if (
+      inputFiles.length > 0 &&
+      selectedApiKeys.length > 0
+    ) {
+      void generateInputImageTags(inputFiles);
+    }
+
+    // generateInputImageTags is intentionally omitted because it is recreated
+    // on render. The effect is driven by the input count and selected-key count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputFiles.length, selectedApiKeys.length]);
+
 
   /*
    * ------------------------------------------------------------
@@ -2226,14 +2302,6 @@ function ImageGenerator({
     setGeneratedImageFilename("");
     setGeneratedImageModel("");
     setGeneratedImageProvider("");
-    setGeneratedImageDescription("");
-    setIsGeneratingDescription(false);
-    setSocialDescriptions({});
-    setIsGeneratingSocialDescriptions(false);
-    setSocialDescriptionError("");
-    setSocialDescriptionSaved(false);
-    setSocialDescriptionSaveMessage("");
-    setIsSocialDescriptionPreviewOpen(false);
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
     setError("");
@@ -2995,8 +3063,6 @@ function ImageGenerator({
     setGeneratedImageFilename("");
     setGeneratedImageModel("");
     setGeneratedImageProvider("");
-    setGeneratedImageDescription("");
-    setIsGeneratingDescription(false);
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
     setIsOutputFolderPickerOpen(false);
@@ -3229,17 +3295,6 @@ function ImageGenerator({
             "",
         ),
       );
-
-      // Description is returned together with the successful image-generation
-      // response, so it is never lost because of a second request failing.
-      setIsGeneratingDescription(false);
-      setGeneratedImageDescription(
-        String(
-          data?.description ||
-            `Generated image based on the requested content: ${templatePrompt.trim()}`,
-        ),
-      );
-
       setGeneratedImageSaved(false);
       setGeneratedImageSaveMessage("");
 
@@ -3410,53 +3465,8 @@ const handleOpenGeneratedImageInCanva = async () => {
 
   setIsCreatingCanvaDesign(true);
   setCanvaMessage("");
-  // Open the tab immediately from the click event so browser popup blockers do
-  // not reject the later Canva navigation after asynchronous API calls.
-  const canvaWindow = window.open("about:blank", "_blank");
 
   try {
-    const statusResponse = await fetch(
-      `${API_BASE_URL}/api/canva/connect/oauth/status`,
-      { credentials: "include" },
-    );
-    const status = await statusResponse.json().catch(() => null);
-
-    if (!statusResponse.ok) {
-      throw new Error(
-        String(status?.detail || "Unable to check Canva connection."),
-      );
-    }
-
-    if (!status?.configured) {
-      throw new Error(
-        "Canva Connect is not configured. Set CANVA_CONNECT_CLIENT_ID and CANVA_CONNECT_CLIENT_SECRET in the backend environment.",
-      );
-    }
-
-    if (!status?.authenticated) {
-      const authResponse = await fetch(
-        `${API_BASE_URL}/api/canva/connect/oauth/start`,
-        { credentials: "include" },
-      );
-      const authData = await authResponse.json().catch(() => null);
-
-      if (!authResponse.ok || !authData?.authorization_url) {
-        throw new Error(
-          String(authData?.detail || "Unable to start Canva authorization."),
-        );
-      }
-
-      if (canvaWindow) {
-        canvaWindow.location.href = String(authData.authorization_url);
-      } else {
-        window.open(String(authData.authorization_url), "_blank");
-      }
-      setCanvaMessage(
-        "Canva authorization opened in a new tab. Approve access, return here, and click Open / Edit in Canva again.",
-      );
-      return;
-    }
-
     const formData = new FormData();
     formData.append("filename", generatedImageFilename);
     formData.append("design_type", "poster");
@@ -3469,197 +3479,46 @@ const handleOpenGeneratedImageInCanva = async () => {
         credentials: "include",
       },
     );
+
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
       throw new Error(
-        String(data?.detail || "Unable to create the Canva design."),
+        String(
+          data?.detail ||
+            "Unable to create the editable Canva design.",
+        ),
       );
     }
 
-    if (!data?.edit_url || !data?.design_id) {
+    if (!data?.edit_url) {
       throw new Error(
-        "Canva did not return the design ID and edit URL.",
+        "Canva created the design but did not return an edit URL.",
       );
     }
 
     setCanvaEditUrl(String(data.edit_url));
-    setCanvaDesignId(String(data.design_id));
-    setCanvaMessage(
-      String(data.message || "Editable Canva design created successfully."),
-    );
+    setCanvaDesignId(String(data.design_id || ""));
+    setCanvaMessage("Editable Canva design created successfully.");
 
-    if (canvaWindow) {
-      canvaWindow.location.href = String(data.edit_url);
-    } else {
-      window.open(String(data.edit_url), "_blank");
-    }
+    window.open(
+      String(data.edit_url),
+      "_blank",
+      "noopener,noreferrer",
+    );
   } catch (error) {
-    if (canvaWindow && !canvaWindow.closed) {
-      try { canvaWindow.close(); } catch { /* ignore popup cleanup errors */ }
-    }
     console.error("Canva design creation failed:", error);
     setCanvaEditUrl("");
     setCanvaDesignId("");
     setCanvaMessage(
       error instanceof Error
         ? error.message
-        : "Unable to create the Canva design.",
+        : "Unable to create the editable Canva design.",
     );
   } finally {
     setIsCreatingCanvaDesign(false);
   }
 };
-
-  async function handleGenerateSocialDescriptions() {
-    if (!generatedImageFilename || isGeneratingSocialDescriptions) return;
-
-    setIsGeneratingSocialDescriptions(true);
-    setSocialDescriptionError("");
-    setSocialDescriptionSaved(false);
-    setSocialDescriptionSaveMessage("");
-
-    try {
-      const formData = new FormData();
-      formData.append("filename", generatedImageFilename);
-      formData.append("prompt", templatePrompt.trim());
-      formData.append("template_json", "{}");
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/social-media/generate`,
-        {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        },
-      );
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(
-          String(
-            data?.detail ||
-              "Unable to generate the social media descriptions.",
-          ),
-        );
-      }
-
-      if (data?.descriptions && typeof data.descriptions === "object") {
-        setSocialDescriptions(data.descriptions);
-      } else {
-        const rawContent = String(data?.content || "").trim();
-        const limits: Record<string, number> = {
-          "[LINKEDIN]": 3000,
-          "[X / TWITTER]": 280,
-          "[FACEBOOK]": 10000,
-          "[INSTAGRAM]": 2200,
-        };
-        const headings = Object.keys(limits);
-        const parsed: Record<string, { text: string; character_count: number; character_limit: number }> = {};
-
-        headings.forEach((heading, index) => {
-          const startIndex = rawContent.indexOf(heading);
-          if (startIndex < 0) return;
-          const contentStart = startIndex + heading.length;
-          const nextPositions = headings
-            .slice(index + 1)
-            .map((nextHeading) => rawContent.indexOf(nextHeading, contentStart))
-            .filter((position) => position >= 0);
-          const endIndex = nextPositions.length
-            ? Math.min(...nextPositions)
-            : rawContent.length;
-          const text = rawContent.slice(contentStart, endIndex).trim();
-          const platform = heading
-            .replace(/^\[|\]$/g, "")
-            .replace("X / TWITTER", "X / Twitter")
-            .replace("LINKEDIN", "LinkedIn")
-            .replace("FACEBOOK", "Facebook")
-            .replace("INSTAGRAM", "Instagram");
-
-          if (text) {
-            parsed[platform] = {
-              text,
-              character_count: text.length,
-              character_limit: limits[heading],
-            };
-          }
-        });
-
-        if (!Object.keys(parsed).length) {
-          throw new Error(
-            "The selected API returned no recognizable social media descriptions.",
-          );
-        }
-        setSocialDescriptions(parsed);
-      }
-
-      setIsSocialDescriptionPreviewOpen(false);
-    } catch (error) {
-      console.error("Social media description generation failed:", error);
-      setSocialDescriptionError(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate the social media descriptions.",
-      );
-    } finally {
-      setIsGeneratingSocialDescriptions(false);
-    }
-  }
-
-  async function handleSaveSocialDescriptionsToDrive() {
-    if (
-      !generatedImageFilename ||
-      Object.keys(socialDescriptions).length === 0 ||
-      isGeneratingSocialDescriptions ||
-      socialDescriptionSaved
-    ) {
-      return;
-    }
-
-    setSocialDescriptionSaveMessage("");
-    try {
-      const formData = new FormData();
-      formData.append(
-        "filename",
-        `${generatedImageFilename.replace(/\.[^.]+$/, "")}_description.txt`,
-      );
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/social-media/save-to-drive`,
-        {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        },
-      );
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(
-          String(
-            data?.detail ||
-              "Unable to save the social media descriptions to Google Drive.",
-          ),
-        );
-      }
-
-      setSocialDescriptionSaved(true);
-      setSocialDescriptionSaveMessage(
-        String(
-          data?.message ||
-            "Social media descriptions saved to Google Drive / outputs.",
-        ),
-      );
-    } catch (error) {
-      console.error("Saving social media descriptions failed:", error);
-      setSocialDescriptionError(
-        error instanceof Error
-          ? error.message
-          : "Unable to save the social media descriptions.",
-      );
-    }
-  }
-
 
   const handleSaveGeneratedImageToDrive = async () => {
     if (!generatedImageFilename || isSavingGeneratedImage) return;
@@ -5819,15 +5678,6 @@ const handleOpenGeneratedImageInCanva = async () => {
 
                 )}
 
-                {(isGeneratingDescription || generatedImageDescription) && (
-                  <div className="generated-output-meta" style={{ marginTop: "12px", alignItems: "flex-start" }}>
-                    <span>Description</span>
-                    <strong style={{ maxWidth: "70%", whiteSpace: "pre-wrap", textAlign: "right" }}>
-                      {isGeneratingDescription ? "Generating description..." : generatedImageDescription}
-                    </strong>
-                  </div>
-                )}
-
                 
 <div
   style={{
@@ -5843,7 +5693,9 @@ const handleOpenGeneratedImageInCanva = async () => {
     onClick={handleOpenGeneratedImageInCanva}
     disabled={isCreatingCanvaDesign}
   >
-    {isCreatingCanvaDesign ? "Opening Canva..." : "Open / Edit in Canva"}
+    {isCreatingCanvaDesign
+      ? "Opening Canva..."
+      : "Open / Edit in Canva"}
   </button>
 </div>
 
@@ -5885,97 +5737,6 @@ const handleOpenGeneratedImageInCanva = async () => {
     )}
   </div>
 )}
-
-{/* ======================================================
-    SOCIAL MEDIA DESCRIPTION — post-image stage only
-    ====================================================== */}
-<div
-  style={{
-    marginTop: "18px",
-    padding: "14px",
-    borderRadius: "12px",
-    border: "1px solid rgba(120, 100, 255, 0.22)",
-    background: "rgba(120, 100, 255, 0.045)",
-  }}
->
-  <div style={{ marginBottom: "10px" }}>
-    <span style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", opacity: 0.7 }}>
-      NEXT STEP
-    </span>
-    <h3 style={{ margin: "4px 0 5px" }}>Social Media Descriptions</h3>
-    <p style={{ margin: 0, fontSize: "12px", opacity: 0.72 }}>
-      Generate platform-specific descriptions from the final generated image.
-    </p>
-  </div>
-
-  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-    <button
-      type="button"
-      className="primary-button"
-      onClick={handleGenerateSocialDescriptions}
-      disabled={isGeneratingSocialDescriptions}
-    >
-      {isGeneratingSocialDescriptions ? "Generating Descriptions..." : "Generate Description"}
-    </button>
-
-    <button
-      type="button"
-      className="secondary-button"
-      onClick={() => setIsSocialDescriptionPreviewOpen(true)}
-      disabled={Object.keys(socialDescriptions).length === 0}
-    >
-      Preview
-    </button>
-
-    <button
-      type="button"
-      className="secondary-button"
-      onClick={handleSaveSocialDescriptionsToDrive}
-      disabled={
-        Object.keys(socialDescriptions).length === 0 ||
-        socialDescriptionSaved
-      }
-    >
-      {socialDescriptionSaved ? "Saved to Google Drive / outputs" : "Save Description"}
-    </button>
-  </div>
-
-  {socialDescriptionError && (
-    <p style={{ margin: "9px 0 0", color: "#d84a6a", fontSize: "12px" }}>
-      {socialDescriptionError}
-    </p>
-  )}
-
-  {socialDescriptionSaveMessage && (
-    <p style={{ margin: "9px 0 0", fontSize: "12px" }}>
-      {socialDescriptionSaveMessage}
-    </p>
-  )}
-
-  {Object.keys(socialDescriptions).length > 0 && (
-    <div style={{ display: "grid", gap: "7px", marginTop: "12px" }}>
-      {(Object.entries(socialDescriptions) as Array<[string, SocialDescriptionItem]>).map(([platform, item]) => (
-        <div
-          key={platform}
-          style={{
-            padding: "9px 10px",
-            borderRadius: "9px",
-            background: "rgba(255,255,255,0.045)",
-            border: "1px solid rgba(255,255,255,0.08)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11px" }}>
-            <strong>{platform}</strong>
-            <span style={{ opacity: 0.65 }}>{item.character_count} / {item.character_limit}</span>
-          </div>
-          <p style={{ margin: "6px 0 0", fontSize: "12px", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
-            {item.text}
-          </p>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
 
                 {isOutputFolderPickerOpen && (
                   <div
@@ -6159,44 +5920,6 @@ const handleOpenGeneratedImageInCanva = async () => {
 
       </main>
 
-
-      {isSocialDescriptionPreviewOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={() => setIsSocialDescriptionPreviewOpen(false)}
-        >
-          <div
-            className="social-description-modal"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <div className="section-kicker">PREVIEW</div>
-                <h2>Social Media Descriptions</h2>
-              </div>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setIsSocialDescriptionPreviewOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-
-            <div style={{ display: "grid", gap: "12px" }}>
-              {(Object.entries(socialDescriptions) as Array<[string, SocialDescriptionItem]>).map(([platform, item]) => (
-                <article key={platform} style={{ padding: "12px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.1)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-                    <strong>{platform}</strong>
-                    <span style={{ opacity: 0.65 }}>{item.character_count} / {item.character_limit}</span>
-                  </div>
-                  <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{item.text}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ========================================================
           REFERENCE MODAL
@@ -6908,6 +6631,13 @@ function App() {
             const validSelectedIds = selectedKeys.filter((id) =>
               availableIds.has(id),
             );
+
+            if (validSelectedIds.length === 0) {
+              console.error(
+                "API setup completed without a valid selected API; keeping the API Setup screen active.",
+              );
+              return;
+            }
 
             setSelectedApiKeys(validSelectedIds);
             setSelectedApiServices(
