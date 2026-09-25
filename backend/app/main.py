@@ -2433,85 +2433,87 @@ def get_drive_file(
 # Input files
 # -------------------------------------------------------------------
 
-def get_input_files() -> list[dict]:
-    """
-    Return references from the configured Google Drive folder plus
-    locally uploaded images.
+drive_files: list[dict] = []
 
-    Google Drive loading is based on the uploaded folder configuration and
-    the OAuth files in the backend folder. It does not depend on a frontend
-    checkbox.
-    """
-    # The API-key session is intentionally in memory, but Drive folder
-    # configuration is non-secret and persisted so references survive a
-    # backend restart.
-    if not (
-        normalize_drive_folder_id(
-            API_KEY_STATE.get("drive_folder_id", "")
-        )
-        or API_KEY_STATE.get("drive_folder_name", "")
-    ):
-        load_persisted_drive_configuration()
-
-    drive_files: list[dict] = []
-
-    has_drive_configuration = bool(
-        normalize_drive_folder_id(
-            API_KEY_STATE.get("drive_folder_id", "")
-        )
-        or API_KEY_STATE.get("drive_folder_name", "")
+has_drive_configuration = bool(
+    normalize_drive_folder_id(
+        API_KEY_STATE.get("drive_folder_id", "")
     )
+    or API_KEY_STATE.get("drive_folder_name", "")
+)
 
-    if (
-        has_drive_configuration
-        and CREDENTIALS_FILE.exists()
-        and TOKEN_FILE.exists()
-    ):
-        try:
-            service = get_drive_service()
-            configured_folders = API_KEY_STATE.get("drive_folders", [])
-            if not configured_folders:
-                configured_folders = [{
-                    "id": normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
-                    "name": str(API_KEY_STATE.get("drive_folder_name", "") or "").strip(),
-                }]
+if has_drive_configuration:
+    try:
+        service = get_drive_service()
 
-            all_drive_files: list[dict] = []
-            resolved_folders: list[dict[str, str]] = []
-            for folder in configured_folders:
-                folder_id = normalize_drive_folder_id(str(folder.get("id", "") or ""))
-                folder_name = str(folder.get("name", "") or "").strip()
-                if not folder_id and not folder_name:
-                    continue
-                resolved_folder_id = resolve_drive_folder_id(service, folder_id, folder_name)
-                resolved_folders.append({"id": resolved_folder_id, "name": folder_name})
-                for drive_file in get_drive_files(service, resolved_folder_id):
-                    drive_file["driveFolderId"] = resolved_folder_id
-                    drive_file["driveFolderName"] = folder_name
-                    all_drive_files.append(drive_file)
+        configured_folders = API_KEY_STATE.get("drive_folders", [])
 
-            drive_files = all_drive_files
-            API_KEY_STATE["drive_folders"] = resolved_folders
-            if resolved_folders:
-                API_KEY_STATE["drive_folder_id"] = resolved_folders[0]["id"]
-                API_KEY_STATE["drive_folder_name"] = resolved_folders[0]["name"]
-            persist_drive_configuration()
-
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Unable to load Google Drive references: "
-                    f"{exc}"
+        if not configured_folders:
+            configured_folders = [{
+                "id": normalize_drive_folder_id(
+                    API_KEY_STATE.get("drive_folder_id", "")
                 ),
-            ) from exc
+                "name": str(
+                    API_KEY_STATE.get("drive_folder_name", "")
+                    or ""
+                ).strip(),
+            }]
 
-    manual_files = get_manual_upload_files()
+        all_drive_files: list[dict] = []
+        resolved_folders: list[dict[str, str]] = []
 
-    return sorted(
-        drive_files + manual_files,
-        key=lambda item: item["name"].lower(),
-    )
+        for folder in configured_folders:
+            folder_id = normalize_drive_folder_id(
+                str(folder.get("id", "") or "")
+            )
+            folder_name = str(
+                folder.get("name", "") or ""
+            ).strip()
+
+            if not folder_id and not folder_name:
+                continue
+
+            resolved_folder_id = resolve_drive_folder_id(
+                service,
+                folder_id,
+                folder_name,
+            )
+
+            resolved_folders.append({
+                "id": resolved_folder_id,
+                "name": folder_name,
+            })
+
+            for drive_file in get_drive_files(
+                service,
+                resolved_folder_id,
+            ):
+                drive_file["driveFolderId"] = resolved_folder_id
+                drive_file["driveFolderName"] = folder_name
+                all_drive_files.append(drive_file)
+
+        drive_files = all_drive_files
+
+        API_KEY_STATE["drive_folders"] = resolved_folders
+
+        if resolved_folders:
+            API_KEY_STATE["drive_folder_id"] = (
+                resolved_folders[0]["id"]
+            )
+            API_KEY_STATE["drive_folder_name"] = (
+                resolved_folders[0]["name"]
+            )
+
+        persist_drive_configuration()
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to load Google Drive references: "
+                f"{exc}"
+            ),
+        ) from exc
 
 
 # -------------------------------------------------------------------
