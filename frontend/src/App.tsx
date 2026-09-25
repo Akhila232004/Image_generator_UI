@@ -13,9 +13,9 @@ import type {
 import "./App.css";
 
 import { generateTemplate } from "./services/templateService";
-
-// Kept only for legacy template-preview state; template generation is disabled in the UI.
-type GenerateTemplateResponse = any;
+import type {
+  GenerateTemplateResponse,
+} from "./services/templateService";
 
 
 const API_BASE_URL = "http://localhost:8000";
@@ -369,16 +369,13 @@ function ApiKeySetup({
         );
       }
 
-      setApiKeys(displayKeys);
+      if (!displayKeys.length) {
+        throw new Error(
+          "No supported API keys were found in the uploaded file.",
+        );
+      }
 
-setSelectedKeys(
-  displayKeys
-    .filter(
-      (api) =>
-        !api.keyName?.startsWith("GOOGLE_DRIVE_"),
-    )
-    .map((api) => api.id),
-);
+      setApiKeys(displayKeys);
 
     } catch (err) {
       console.error(
@@ -423,26 +420,77 @@ setSelectedKeys(
 
 
   async function handleContinue() {
-  if (!apiKeys.length) {
-    setError("Upload an API key file before continuing.");
-    return;
+    if (!apiKeys.length) {
+      setError("Upload an API key file before continuing.");
+      return;
+    }
+
+    setError("");
+    setIsSaving(true);
+
+    try {
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/api-keys/select`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              // Start the Image Generator with all uploaded AI keys selected.
+              // The user can then deselect any key(s) from the header.
+              selected_ids: apiKeys.map((api) => api.id),
+            }),
+            credentials: "include",
+          },
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to activate the selected APIs.",
+          ),
+        );
+      }
+
+      const selectedServices =
+        apiKeys.map((api) => ({
+          id: api.id,
+          name: api.name,
+          keyName: api.keyName,
+        }));
+
+      // Keep all uploaded AI keys selected initially. The Image Generator
+      // header still allows the user to select/deselect multiple keys.
+      onComplete(
+        apiKeys.map((api) => api.id),
+        selectedServices,
+      );
+
+    } catch (err) {
+      console.error(
+        "API selection failed:",
+        err,
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to activate the selected APIs.",
+      );
+
+    } finally {
+      setIsSaving(false);
+    }
   }
-
-  setError("");
-  setIsSaving(true);
-
-  try {
-    const services: SelectedApiService[] = apiKeys.map((api) => ({
-      id: api.id,
-      name: api.name,
-      keyName: api.keyName,
-    }));
-
-    onComplete(selectedKeys, services);
-  } finally {
-    setIsSaving(false);
-  }
-}
 
 
   return (
@@ -1449,7 +1497,9 @@ function ImageGenerator({
     useState(false);
 
   const [templateResult, setTemplateResult] =
-    useState<GenerateTemplateResponse | null>(null);
+    useState<GenerateTemplateResponse | null>(
+      null,
+    );
 
   const [templateApiProvider, setTemplateApiProvider] =
     useState("");
@@ -1469,17 +1519,37 @@ function ImageGenerator({
   const [generatedImageFilename, setGeneratedImageFilename] =
     useState("");
 
+  const [generatedImageDescription, setGeneratedImageDescription] =
+    useState("");
+
+  type SocialDescriptionItem = {
+    text: string;
+    character_count: number;
+    character_limit: number;
+  };
+
+  const [socialDescriptions, setSocialDescriptions] =
+    useState<Record<string, SocialDescriptionItem>>({});
+  const [socialDescriptionFilename, setSocialDescriptionFilename] =
+    useState("");
+  const [socialDescriptionPreviewContent, setSocialDescriptionPreviewContent] =
+    useState("");
+  const [isGeneratingSocialDescriptions, setIsGeneratingSocialDescriptions] =
+    useState(false);
+  const [socialDescriptionError, setSocialDescriptionError] =
+    useState("");
+  const [socialDescriptionSaved, setSocialDescriptionSaved] =
+    useState(false);
+  const [socialDescriptionSaveMessage, setSocialDescriptionSaveMessage] =
+    useState("");
+  const [isSocialDescriptionPreviewOpen, setIsSocialDescriptionPreviewOpen] =
+    useState(false);
+
   const [generatedImageModel, setGeneratedImageModel] =
     useState("");
 
   const [generatedImageProvider, setGeneratedImageProvider] =
     useState("");
-
-  const [generatedImageDescription, setGeneratedImageDescription] =
-    useState("");
-
-  const [isGeneratingDescription, setIsGeneratingDescription] =
-    useState(false);
 
   const [isSavingGeneratedImage, setIsSavingGeneratedImage] =
     useState(false);
@@ -1494,21 +1564,6 @@ function ImageGenerator({
   const [canvaDesignId, setCanvaDesignId] = useState("");
   const [isCreatingCanvaDesign, setIsCreatingCanvaDesign] = useState(false);
   const [canvaMessage, setCanvaMessage] = useState("");
-
-  // Post-image description feature. This is intentionally separate from
-  // template/prompt generation, which remains disabled.
-  type SocialDescriptionItem = {
-    text: string;
-    character_count: number;
-    character_limit: number;
-  };
-  const [socialDescriptions, setSocialDescriptions] =
-    useState<Record<string, SocialDescriptionItem>>({});
-  const [isGeneratingSocialDescriptions, setIsGeneratingSocialDescriptions] = useState(false);
-  const [socialDescriptionError, setSocialDescriptionError] = useState("");
-  const [socialDescriptionSaved, setSocialDescriptionSaved] = useState(false);
-  const [socialDescriptionSaveMessage, setSocialDescriptionSaveMessage] = useState("");
-  const [isSocialDescriptionPreviewOpen, setIsSocialDescriptionPreviewOpen] = useState(false);
 
   const [driveOutputFolders, setDriveOutputFolders] = useState<DriveOutputFolder[]>([]);
   const [selectedOutputFolderId, setSelectedOutputFolderId] = useState("");
@@ -1568,18 +1623,47 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-  async function loadDriveOutputFolders() {
+  async function loadDriveOutputFolders(): Promise<DriveOutputFolder[]> {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/drive/folders`, { credentials: "include" });
+      const response = await fetch(
+        `${API_BASE_URL}/api/drive/folders`,
+        { credentials: "include" },
+      );
+
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(data?.detail || "Unable to load Google Drive folders."));
-      const folders: DriveOutputFolder[] = Array.isArray(data?.folders) ? data.folders : [];
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ||
+              "Unable to load Google Drive folders.",
+          ),
+        );
+      }
+
+      const folders: DriveOutputFolder[] =
+        Array.isArray(data?.folders)
+          ? data.folders
+          : [];
+
       setDriveOutputFolders(folders);
-      setSelectedOutputFolderId((current) => current && folders.some((f) => f.id === current) ? current : String(folders[0]?.id || ""));
+
+      setSelectedOutputFolderId((current) =>
+        current &&
+        folders.some((folder) => folder.id === current)
+          ? current
+          : String(folders[0]?.id || ""),
+      );
+
+      return folders;
     } catch (error) {
-      console.error("Loading Google Drive output folders failed:", error);
-      setDriveOutputFolders([]);
-      setSelectedOutputFolderId("");
+      console.error(
+        "Loading Google Drive output folders failed:",
+        error,
+      );
+
+      // Preserve an already-loaded list if a refresh fails.
+      return driveOutputFolders;
     }
   }
 
@@ -2172,9 +2256,22 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-  // Automatic AI tagging is intentionally disabled.
-  // Reference loading must not depend on API-key selection, and loading
-  // Google Drive references must never trigger /api/inputs/tag-all.
+  useEffect(() => {
+    // Do not call the AI tagging endpoint until at least one AI API key
+    // has been selected. API selection is the source of truth for the
+    // complete AI pipeline.
+    if (
+      inputFiles.length > 0 &&
+      selectedApiKeys.length > 0
+    ) {
+      void generateInputImageTags(inputFiles);
+    }
+
+    // generateInputImageTags is intentionally omitted because it is recreated
+    // on render. The effect is driven by the input count and selected-key count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputFiles.length, selectedApiKeys.length]);
+
 
   /*
    * ------------------------------------------------------------
@@ -2231,16 +2328,25 @@ function ImageGenerator({
     setPromptMode("manual");
     setGeneratedImageUrl("");
     setGeneratedImageFilename("");
-    setGeneratedImageModel("");
-    setGeneratedImageProvider("");
     setGeneratedImageDescription("");
-    setIsGeneratingDescription(false);
     setSocialDescriptions({});
-    setIsGeneratingSocialDescriptions(false);
+    setSocialDescriptionFilename("");
+    setSocialDescriptionPreviewContent("");
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setGeneratedImageModel("");
+    setSocialDescriptions({});
     setSocialDescriptionError("");
     setSocialDescriptionSaved(false);
     setSocialDescriptionSaveMessage("");
     setIsSocialDescriptionPreviewOpen(false);
+    setSocialDescriptions({});
+    setSocialDescriptionError("");
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setGeneratedImageProvider("");
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
     setError("");
@@ -2814,6 +2920,13 @@ function ImageGenerator({
 
     setGeneratedImageUrl("");
     setGeneratedImageFilename("");
+    setGeneratedImageDescription("");
+    setSocialDescriptions({});
+    setSocialDescriptionFilename("");
+    setSocialDescriptionPreviewContent("");
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
+    setIsSocialDescriptionPreviewOpen(false);
     setGeneratedImageModel("");
 
     setError("");
@@ -3002,8 +3115,6 @@ function ImageGenerator({
     setGeneratedImageFilename("");
     setGeneratedImageModel("");
     setGeneratedImageProvider("");
-    setGeneratedImageDescription("");
-    setIsGeneratingDescription(false);
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
     setIsOutputFolderPickerOpen(false);
@@ -3224,6 +3335,18 @@ function ImageGenerator({
         ),
       );
 
+      const returnedDescription =
+        typeof data?.description === "string"
+          ? data.description.trim()
+          : "";
+
+      setGeneratedImageDescription(
+        returnedDescription ||
+          (templatePrompt.trim()
+            ? `Generated image based on the selected reference and prompt: ${templatePrompt.trim()}`
+            : "Generated image based on the selected reference image."),
+      );
+
       setGeneratedImageModel(
         String(
           data.model ||
@@ -3236,17 +3359,6 @@ function ImageGenerator({
             "",
         ),
       );
-
-      // Description is returned together with the successful image-generation
-      // response, so it is never lost because of a second request failing.
-      setIsGeneratingDescription(false);
-      setGeneratedImageDescription(
-        String(
-          data?.description ||
-            `Generated image based on the requested content: ${templatePrompt.trim()}`,
-        ),
-      );
-
       setGeneratedImageSaved(false);
       setGeneratedImageSaveMessage("");
 
@@ -3417,53 +3529,8 @@ const handleOpenGeneratedImageInCanva = async () => {
 
   setIsCreatingCanvaDesign(true);
   setCanvaMessage("");
-  // Open the tab immediately from the click event so browser popup blockers do
-  // not reject the later Canva navigation after asynchronous API calls.
-  const canvaWindow = window.open("about:blank", "_blank");
 
   try {
-    const statusResponse = await fetch(
-      `${API_BASE_URL}/api/canva/connect/oauth/status`,
-      { credentials: "include" },
-    );
-    const status = await statusResponse.json().catch(() => null);
-
-    if (!statusResponse.ok) {
-      throw new Error(
-        String(status?.detail || "Unable to check Canva connection."),
-      );
-    }
-
-    if (!status?.configured) {
-      throw new Error(
-        "Canva Connect is not configured. Set CANVA_CONNECT_CLIENT_ID and CANVA_CONNECT_CLIENT_SECRET in the backend environment.",
-      );
-    }
-
-    if (!status?.authenticated) {
-      const authResponse = await fetch(
-        `${API_BASE_URL}/api/canva/connect/oauth/start`,
-        { credentials: "include" },
-      );
-      const authData = await authResponse.json().catch(() => null);
-
-      if (!authResponse.ok || !authData?.authorization_url) {
-        throw new Error(
-          String(authData?.detail || "Unable to start Canva authorization."),
-        );
-      }
-
-      if (canvaWindow) {
-        canvaWindow.location.href = String(authData.authorization_url);
-      } else {
-        window.open(String(authData.authorization_url), "_blank");
-      }
-      setCanvaMessage(
-        "Canva authorization opened in a new tab. Approve access, return here, and click Open / Edit in Canva again.",
-      );
-      return;
-    }
-
     const formData = new FormData();
     formData.append("filename", generatedImageFilename);
     formData.append("design_type", "poster");
@@ -3476,42 +3543,41 @@ const handleOpenGeneratedImageInCanva = async () => {
         credentials: "include",
       },
     );
+
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
       throw new Error(
-        String(data?.detail || "Unable to create the Canva design."),
+        String(
+          data?.detail ||
+            "Unable to create the editable Canva design.",
+        ),
       );
     }
 
-    if (!data?.edit_url || !data?.design_id) {
+    if (!data?.edit_url) {
       throw new Error(
-        "Canva did not return the design ID and edit URL.",
+        "Canva created the design but did not return an edit URL.",
       );
     }
 
     setCanvaEditUrl(String(data.edit_url));
-    setCanvaDesignId(String(data.design_id));
-    setCanvaMessage(
-      String(data.message || "Editable Canva design created successfully."),
-    );
+    setCanvaDesignId(String(data.design_id || ""));
+    setCanvaMessage("Editable Canva design created successfully.");
 
-    if (canvaWindow) {
-      canvaWindow.location.href = String(data.edit_url);
-    } else {
-      window.open(String(data.edit_url), "_blank");
-    }
+    window.open(
+      String(data.edit_url),
+      "_blank",
+      "noopener,noreferrer",
+    );
   } catch (error) {
-    if (canvaWindow && !canvaWindow.closed) {
-      try { canvaWindow.close(); } catch { /* ignore popup cleanup errors */ }
-    }
     console.error("Canva design creation failed:", error);
     setCanvaEditUrl("");
     setCanvaDesignId("");
     setCanvaMessage(
       error instanceof Error
         ? error.message
-        : "Unable to create the Canva design.",
+        : "Unable to create the editable Canva design.",
     );
   } finally {
     setIsCreatingCanvaDesign(false);
@@ -3519,7 +3585,9 @@ const handleOpenGeneratedImageInCanva = async () => {
 };
 
   async function handleGenerateSocialDescriptions() {
-    if (!generatedImageFilename || isGeneratingSocialDescriptions) return;
+    if (!generatedImageFilename || isGeneratingSocialDescriptions) {
+      return;
+    }
 
     setIsGeneratingSocialDescriptions(true);
     setSocialDescriptionError("");
@@ -3540,6 +3608,7 @@ const handleOpenGeneratedImageInCanva = async () => {
           credentials: "include",
         },
       );
+
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
@@ -3551,43 +3620,104 @@ const handleOpenGeneratedImageInCanva = async () => {
         );
       }
 
-      if (data?.descriptions && typeof data.descriptions === "object") {
-        setSocialDescriptions(data.descriptions);
+      setSocialDescriptionFilename(
+        String(data?.social_media_filename || ""),
+      );
+      setSocialDescriptionPreviewContent(
+        String(data?.content || "").trim(),
+      );
+
+      if (
+        data?.descriptions &&
+        typeof data.descriptions === "object"
+      ) {
+        setSocialDescriptions(
+          data.descriptions as Record<
+            string,
+            SocialDescriptionItem
+          >,
+        );
       } else {
-        const rawContent = String(data?.content || "").trim();
+        const rawContent =
+          String(data?.content || "").trim();
+
         const limits: Record<string, number> = {
           "[LINKEDIN]": 3000,
           "[X / TWITTER]": 280,
           "[FACEBOOK]": 10000,
           "[INSTAGRAM]": 2200,
         };
+
         const headings = Object.keys(limits);
-        const parsed: Record<string, { text: string; character_count: number; character_limit: number }> = {};
+
+        const parsed: Record<
+          string,
+          SocialDescriptionItem
+        > = {};
 
         headings.forEach((heading, index) => {
-          const startIndex = rawContent.indexOf(heading);
-          if (startIndex < 0) return;
-          const contentStart = startIndex + heading.length;
+          const startIndex =
+            rawContent.indexOf(heading);
+
+          if (startIndex < 0) {
+            return;
+          }
+
+          const contentStart =
+            startIndex + heading.length;
+
           const nextPositions = headings
             .slice(index + 1)
-            .map((nextHeading) => rawContent.indexOf(nextHeading, contentStart))
-            .filter((position) => position >= 0);
-          const endIndex = nextPositions.length
-            ? Math.min(...nextPositions)
-            : rawContent.length;
-          const text = rawContent.slice(contentStart, endIndex).trim();
-          const platform = heading
-            .replace(/^\[|\]$/g, "")
-            .replace("X / TWITTER", "X / Twitter")
-            .replace("LINKEDIN", "LinkedIn")
-            .replace("FACEBOOK", "Facebook")
-            .replace("INSTAGRAM", "Instagram");
+            .map((nextHeading) =>
+              rawContent.indexOf(
+                nextHeading,
+                contentStart,
+              ),
+            )
+            .filter(
+              (position) => position >= 0,
+            );
 
-          if (text) {
+          const endIndex =
+            nextPositions.length > 0
+              ? Math.min(...nextPositions)
+              : rawContent.length;
+
+          const content =
+            rawContent
+              .slice(
+                contentStart,
+                endIndex,
+              )
+              .trim();
+
+          const platform =
+            heading
+              .replace(/^\[|\]$/g, "")
+              .replace(
+                "X / TWITTER",
+                "X / Twitter",
+              )
+              .replace(
+                "LINKEDIN",
+                "LinkedIn",
+              )
+              .replace(
+                "FACEBOOK",
+                "Facebook",
+              )
+              .replace(
+                "INSTAGRAM",
+                "Instagram",
+              );
+
+          if (content) {
             parsed[platform] = {
-              text,
-              character_count: text.length,
-              character_limit: limits[heading],
+              text: content,
+              character_count:
+                content.length,
+              character_limit:
+                limits[heading],
             };
           }
         });
@@ -3597,12 +3727,23 @@ const handleOpenGeneratedImageInCanva = async () => {
             "The selected API returned no recognizable social media descriptions.",
           );
         }
+
         setSocialDescriptions(parsed);
+      }
+
+      if (!String(data?.social_media_filename || "").trim()) {
+        setSocialDescriptionFilename(
+          `${generatedImageFilename.replace(/\.[^.]+$/, "")}_description.txt`,
+        );
       }
 
       setIsSocialDescriptionPreviewOpen(false);
     } catch (error) {
-      console.error("Social media description generation failed:", error);
+      console.error(
+        "Social media description generation failed:",
+        error,
+      );
+
       setSocialDescriptionError(
         error instanceof Error
           ? error.message
@@ -3623,13 +3764,20 @@ const handleOpenGeneratedImageInCanva = async () => {
       return;
     }
 
+    setSocialDescriptionError("");
     setSocialDescriptionSaveMessage("");
+
     try {
       const formData = new FormData();
-      formData.append(
-        "filename",
-        `${generatedImageFilename.replace(/\.[^.]+$/, "")}_description.txt`,
-      );
+
+      const descriptionFilename =
+        socialDescriptionFilename ||
+        `${generatedImageFilename.replace(
+          /\.[^.]+$/,
+          "",
+        )}_description.txt`;
+
+      formData.append("filename", descriptionFilename);
 
       const response = await fetch(
         `${API_BASE_URL}/api/social-media/save-to-drive`,
@@ -3639,13 +3787,17 @@ const handleOpenGeneratedImageInCanva = async () => {
           credentials: "include",
         },
       );
-      const data = await response.json().catch(() => null);
+
+      const data =
+        await response
+          .json()
+          .catch(() => null);
 
       if (!response.ok) {
         throw new Error(
           String(
             data?.detail ||
-              "Unable to save the social media descriptions to Google Drive.",
+              "Unable to save the description to Google Drive.",
           ),
         );
       }
@@ -3654,15 +3806,19 @@ const handleOpenGeneratedImageInCanva = async () => {
       setSocialDescriptionSaveMessage(
         String(
           data?.message ||
-            "Social media descriptions saved to Google Drive / outputs.",
+            "Description saved to Google Drive / outputs.",
         ),
       );
     } catch (error) {
-      console.error("Saving social media descriptions failed:", error);
+      console.error(
+        "Saving social media descriptions failed:",
+        error,
+      );
+
       setSocialDescriptionError(
         error instanceof Error
           ? error.message
-          : "Unable to save the social media descriptions.",
+          : "Unable to save the description.",
       );
     }
   }
@@ -3674,9 +3830,18 @@ const handleOpenGeneratedImageInCanva = async () => {
     // First click on Save opens the folder picker. The actual upload only
     // happens after the user chooses a folder and confirms.
     if (!isOutputFolderPickerOpen) {
-      if (driveOutputFolders.length === 0) {
+      const folders =
         await loadDriveOutputFolders();
+
+      if (
+        folders.length > 0 &&
+        !selectedOutputFolderId
+      ) {
+        setSelectedOutputFolderId(
+          String(folders[0].id || ""),
+        );
       }
+
       setGeneratedImageSaveMessage("");
       setIsOutputFolderPickerOpen(true);
       return;
@@ -5764,6 +5929,39 @@ const handleOpenGeneratedImageInCanva = async () => {
                   Generated Image
                 </h3>
 
+                {generatedImageDescription && (
+                  <div
+                    className="generated-output-description"
+                    style={{
+                      marginTop: "12px",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      background: "rgba(255,255,255,0.035)",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        opacity: 0.7,
+                        marginBottom: "5px",
+                      }}
+                    >
+                      Description
+                    </span>
+                    <p
+                      style={{
+                        margin: 0,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {generatedImageDescription}
+                    </p>
+                  </div>
+                )}
+
                 <p>
                   The selected reference images are synthesized into one
                   coherent output. Their requested visual features are
@@ -5826,15 +6024,6 @@ const handleOpenGeneratedImageInCanva = async () => {
 
                 )}
 
-                {(isGeneratingDescription || generatedImageDescription) && (
-                  <div className="generated-output-meta" style={{ marginTop: "12px", alignItems: "flex-start" }}>
-                    <span>Description</span>
-                    <strong style={{ maxWidth: "70%", whiteSpace: "pre-wrap", textAlign: "right" }}>
-                      {isGeneratingDescription ? "Generating description..." : generatedImageDescription}
-                    </strong>
-                  </div>
-                )}
-
                 
 <div
   style={{
@@ -5850,7 +6039,9 @@ const handleOpenGeneratedImageInCanva = async () => {
     onClick={handleOpenGeneratedImageInCanva}
     disabled={isCreatingCanvaDesign}
   >
-    {isCreatingCanvaDesign ? "Opening Canva..." : "Open / Edit in Canva"}
+    {isCreatingCanvaDesign
+      ? "Opening Canva..."
+      : "Open / Edit in Canva"}
   </button>
 </div>
 
@@ -5894,7 +6085,8 @@ const handleOpenGeneratedImageInCanva = async () => {
 )}
 
 {/* ======================================================
-    SOCIAL MEDIA DESCRIPTION — post-image stage only
+    POST-IMAGE DESCRIPTION — kept separate from
+    template/prompt generation.
     ====================================================== */}
 <div
   style={{
@@ -5906,30 +6098,62 @@ const handleOpenGeneratedImageInCanva = async () => {
   }}
 >
   <div style={{ marginBottom: "10px" }}>
-    <span style={{ fontSize: "11px", fontWeight: 800, letterSpacing: "0.08em", opacity: 0.7 }}>
+    <span
+      style={{
+        fontSize: "11px",
+        fontWeight: 800,
+        letterSpacing: "0.08em",
+        opacity: 0.7,
+      }}
+    >
       NEXT STEP
     </span>
-    <h3 style={{ margin: "4px 0 5px" }}>Social Media Descriptions</h3>
-    <p style={{ margin: 0, fontSize: "12px", opacity: 0.72 }}>
+
+    <h3 style={{ margin: "4px 0 5px" }}>
+      Social Media Description
+    </h3>
+
+    <p
+      style={{
+        margin: 0,
+        fontSize: "12px",
+        opacity: 0.72,
+      }}
+    >
       Generate platform-specific descriptions from the final generated image.
     </p>
   </div>
 
-  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+  <div
+    style={{
+      display: "flex",
+      gap: "8px",
+      flexWrap: "wrap",
+    }}
+  >
     <button
       type="button"
       className="primary-button"
       onClick={handleGenerateSocialDescriptions}
-      disabled={isGeneratingSocialDescriptions}
+      disabled={
+        !generatedImageFilename ||
+        isGeneratingSocialDescriptions
+      }
     >
-      {isGeneratingSocialDescriptions ? "Generating Descriptions..." : "Generate Description"}
+      {isGeneratingSocialDescriptions
+        ? "Generating Description..."
+        : "Generate Description"}
     </button>
 
     <button
       type="button"
       className="secondary-button"
-      onClick={() => setIsSocialDescriptionPreviewOpen(true)}
-      disabled={Object.keys(socialDescriptions).length === 0}
+      onClick={() =>
+        setIsSocialDescriptionPreviewOpen(true)
+      }
+      disabled={
+        Object.keys(socialDescriptions).length === 0
+      }
     >
       Preview
     </button>
@@ -5940,42 +6164,88 @@ const handleOpenGeneratedImageInCanva = async () => {
       onClick={handleSaveSocialDescriptionsToDrive}
       disabled={
         Object.keys(socialDescriptions).length === 0 ||
-        socialDescriptionSaved
+        socialDescriptionSaved ||
+        isGeneratingSocialDescriptions
       }
     >
-      {socialDescriptionSaved ? "Saved to Google Drive / outputs" : "Save Description"}
+      {socialDescriptionSaved
+        ? "Saved to Google Drive / outputs"
+        : "Save Description"}
     </button>
   </div>
 
   {socialDescriptionError && (
-    <p style={{ margin: "9px 0 0", color: "#d84a6a", fontSize: "12px" }}>
+    <p
+      style={{
+        margin: "9px 0 0",
+        color: "#d84a6a",
+        fontSize: "12px",
+      }}
+    >
       {socialDescriptionError}
     </p>
   )}
 
   {socialDescriptionSaveMessage && (
-    <p style={{ margin: "9px 0 0", fontSize: "12px" }}>
+    <p
+      style={{
+        margin: "9px 0 0",
+        fontSize: "12px",
+      }}
+    >
       {socialDescriptionSaveMessage}
     </p>
   )}
 
   {Object.keys(socialDescriptions).length > 0 && (
-    <div style={{ display: "grid", gap: "7px", marginTop: "12px" }}>
-      {(Object.entries(socialDescriptions) as Array<[string, SocialDescriptionItem]>).map(([platform, item]) => (
+    <div
+      style={{
+        display: "grid",
+        gap: "7px",
+        marginTop: "12px",
+      }}
+    >
+      {(
+        Object.entries(
+          socialDescriptions,
+        ) as Array<
+          [string, SocialDescriptionItem]
+        >
+      ).map(([platform, item]) => (
         <div
           key={platform}
           style={{
             padding: "9px 10px",
             borderRadius: "9px",
-            background: "rgba(255,255,255,0.045)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            background:
+              "rgba(255,255,255,0.045)",
+            border:
+              "1px solid rgba(255,255,255,0.08)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11px" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+              fontSize: "11px",
+            }}
+          >
             <strong>{platform}</strong>
-            <span style={{ opacity: 0.65 }}>{item.character_count} / {item.character_limit}</span>
+            <span style={{ opacity: 0.65 }}>
+              {item.character_count} /{" "}
+              {item.character_limit}
+            </span>
           </div>
-          <p style={{ margin: "6px 0 0", fontSize: "12px", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+
+          <p
+            style={{
+              margin: "6px 0 0",
+              fontSize: "12px",
+              lineHeight: 1.45,
+              whiteSpace: "pre-wrap",
+            }}
+          >
             {item.text}
           </p>
         </div>
@@ -6170,36 +6440,183 @@ const handleOpenGeneratedImageInCanva = async () => {
       {isSocialDescriptionPreviewOpen && (
         <div
           className="modal-backdrop"
-          onMouseDown={() => setIsSocialDescriptionPreviewOpen(false)}
+          onMouseDown={() =>
+            setIsSocialDescriptionPreviewOpen(false)
+          }
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            background: "rgba(0,0,0,0.72)",
+          }}
         >
           <div
-            className="social-description-modal"
-            onMouseDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) =>
+              event.stopPropagation()
+            }
+            style={{
+              width: "min(900px, 100%)",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              borderRadius: "16px",
+              border:
+                "1px solid rgba(255,255,255,0.12)",
+              background: "#15151a",
+              padding: "20px",
+              boxShadow:
+                "0 24px 80px rgba(0,0,0,0.45)",
+            }}
           >
-            <div className="modal-header">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                marginBottom: "16px",
+              }}
+            >
               <div>
-                <div className="section-kicker">PREVIEW</div>
-                <h2>Social Media Descriptions</h2>
+                <div
+                  className="section-kicker"
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 800,
+                    opacity: 0.7,
+                  }}
+                >
+                  PREVIEW
+                </div>
+                <h2 style={{ margin: "4px 0 0" }}>
+                  Social Media Descriptions
+                </h2>
               </div>
+
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => setIsSocialDescriptionPreviewOpen(false)}
+                onClick={() =>
+                  setIsSocialDescriptionPreviewOpen(
+                    false,
+                  )
+                }
               >
                 Close
               </button>
             </div>
 
-            <div style={{ display: "grid", gap: "12px" }}>
-              {(Object.entries(socialDescriptions) as Array<[string, SocialDescriptionItem]>).map(([platform, item]) => (
-                <article key={platform} style={{ padding: "12px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.1)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-                    <strong>{platform}</strong>
-                    <span style={{ opacity: 0.65 }}>{item.character_count} / {item.character_limit}</span>
+            {socialDescriptionPreviewContent && (
+              <article
+                style={{
+                  padding: "14px",
+                  borderRadius: "12px",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(255,255,255,0.035)",
+                }}
+              >
+                <strong>Generated Description File</strong>
+                {socialDescriptionFilename && (
+                  <div style={{ marginTop: "5px", fontSize: "12px", opacity: 0.65 }}>
+                    {socialDescriptionFilename}
                   </div>
-                  <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{item.text}</p>
+                )}
+                <p
+                  style={{
+                    margin: "10px 0 0",
+                    whiteSpace: "pre-wrap",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {socialDescriptionPreviewContent}
+                </p>
+              </article>
+            )}
+
+            <div
+              style={{
+                display: "grid",
+                gap: "12px",
+              }}
+            >
+              {(
+                Object.entries(
+                  socialDescriptions,
+                ) as Array<
+                  [string, SocialDescriptionItem]
+                >
+              ).map(([platform, item]) => (
+                <article
+                  key={platform}
+                  style={{
+                    padding: "14px",
+                    borderRadius: "12px",
+                    border:
+                      "1px solid rgba(255,255,255,0.10)",
+                    background:
+                      "rgba(255,255,255,0.035)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent:
+                        "space-between",
+                      gap: "8px",
+                    }}
+                  >
+                    <strong>{platform}</strong>
+                    <span
+                      style={{
+                        opacity: 0.65,
+                        fontSize: "12px",
+                      }}
+                    >
+                      {item.character_count} /{" "}
+                      {item.character_limit}
+                    </span>
+                  </div>
+
+                  <p
+                    style={{
+                      margin: "8px 0 0",
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {item.text}
+                  </p>
                 </article>
               ))}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: "16px",
+              }}
+            >
+              <button
+                type="button"
+                className="primary-button"
+                onClick={
+                  handleSaveSocialDescriptionsToDrive
+                }
+                disabled={
+                  socialDescriptionSaved ||
+                  Object.keys(
+                    socialDescriptions,
+                  ).length === 0
+                }
+              >
+                {socialDescriptionSaved
+                  ? "Saved to Google Drive / outputs"
+                  : "Save Description"}
+              </button>
             </div>
           </div>
         </div>
