@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from fastapi.responses import (
     FileResponse,
     StreamingResponse,
+    HTMLResponse,
 )
 
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -48,6 +49,12 @@ from app.services.template_generator import (
 from app.services.prompt_generator import (
     generate_image_prompt,
 )
+
+try:
+    from app.services.canva_connect_service import canva_connect_service
+except ImportError:
+    canva_connect_service = None
+
 
 
 # -------------------------------------------------------------------
@@ -123,18 +130,6 @@ CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 DRIVE_CONFIG_FILE = BASE_DIR / "drive_config.json"
 
-# Railway deployment support:
-# Keep the existing local credentials.json/token.json flow, but also allow
-# the same OAuth files to be supplied securely through environment variables.
-# This avoids committing Google OAuth secrets to Git.
-DRIVE_CREDENTIALS_ENV = "GOOGLE_DRIVE_CREDENTIALS_JSON_B64"
-DRIVE_TOKEN_ENV = "GOOGLE_DRIVE_TOKEN_JSON_B64"
-# Backward-compatible names supported for existing local/deployment setups.
-DRIVE_CREDENTIALS_ENV_LEGACY = "GOOGLE_OAUTH_CREDENTIALS_JSON"
-DRIVE_TOKEN_ENV_LEGACY = "GOOGLE_OAUTH_TOKEN_JSON"
-DRIVE_FOLDER_ENV = "GOOGLE_DRIVE_FOLDER_ID"
-DRIVE_OUTPUT_FOLDER_ENV = "GOOGLE_DRIVE_OUTPUT_FOLDER_ID"
-
 API_KEY_STATE = {
     "keys": {},
     "selected_ids": [],
@@ -144,6 +139,7 @@ API_KEY_STATE = {
     "drive_folder_name": "",
     "drive_output_folder_id": "",
     "drive_output_folder_name": "outputs",
+    "drive_output_folders": [],
     "gemini_model": "gemini-3.5-flash-lite",
 }
 
@@ -191,22 +187,6 @@ def load_persisted_drive_configuration() -> None:
     Google Drive authentication continues to use credentials.json/token.json.
     """
     if not DRIVE_CONFIG_FILE.exists():
-        # Railway provides non-secret Drive folder configuration as service
-        # variables. Keep drive_config.json authoritative when it exists, but
-        # use these variables on a fresh deployment.
-        env_folder_id = normalize_drive_folder_id(
-            str(os.getenv(DRIVE_FOLDER_ENV, "") or "")
-        )
-        env_output_folder_id = str(
-            os.getenv(DRIVE_OUTPUT_FOLDER_ENV, "") or ""
-        ).strip()
-        if env_folder_id:
-            API_KEY_STATE["drive_folder_id"] = env_folder_id
-        if env_output_folder_id:
-            API_KEY_STATE["drive_output_folder_id"] = env_output_folder_id
-        if env_folder_id or env_output_folder_id:
-            API_KEY_STATE["drive_output_folder_name"] = "outputs"
-            print("Loaded Google Drive folder configuration from environment.")
         return
 
     try:
@@ -481,7 +461,11 @@ def _selected_pipeline_candidates() -> list[tuple[str, dict]]:
 
 
 def _pipeline_key_is_usable(item: dict) -> bool:
-    """A selected key must be able to perform template, prompt and image stages."""
+    """Return whether a selected credential can perform the FINAL image stage.
+
+    Template and AI-prompt generation are intentionally disabled in the current
+    application flow, so they must not be prerequisites for image generation.
+    """
     if not item or item.get("auth_type") == "oauth":
         return False
     if not str(item.get("value", "")).strip():
@@ -490,13 +474,13 @@ def _pipeline_key_is_usable(item: dict) -> bool:
     if service == "google-drive":
         return False
     try:
-        return bool(_provider_base_url(item) and _provider_text_model(item) and _provider_image_model(item))
+        return bool(_provider_image_model(item))
     except Exception:
         return False
 
 
 def _require_pipeline_key() -> tuple[str, dict]:
-    """Use one selected credential consistently for template, prompt and image stages."""
+    """Return a selected credential capable of final image generation."""
     selected_ids = API_KEY_STATE.get("selected_ids", [])
     if not selected_ids:
         raise HTTPException(
@@ -936,91 +920,8 @@ def normalize_drive_folder_id(value: str) -> str:
     return value
 
 
-def _decode_json_secret(value: str, label: str) -> dict | None:
-    """Decode a JSON secret supplied through an environment variable.
-
-    Railway variables are kept as strings. Accept normal JSON as well as
-    base64-encoded JSON so multiline OAuth files can be stored safely.
-    """
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-
-    candidates = [raw]
-    try:
-        decoded = base64.b64decode(raw, validate=True).decode("utf-8")
-        if decoded.strip():
-            candidates.append(decoded)
-    except Exception:
-        pass
-
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict):
-            return payload
-
-    raise RuntimeError(
-        f"Google Drive {label} environment variable does not contain valid JSON."
-    )
-
-
-def _load_drive_client_config() -> dict | None:
-    """Load OAuth client configuration from env first, then local file."""
-    env_value = (
-        os.getenv(DRIVE_CREDENTIALS_ENV, "").strip()
-        or os.getenv(DRIVE_CREDENTIALS_ENV_LEGACY, "").strip()
-    )
-    if env_value:
-        return _decode_json_secret(env_value, "OAuth credentials")
-
-    if CREDENTIALS_FILE.exists():
-        try:
-            payload = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                "Google Drive credentials.json could not be read."
-            ) from exc
-
-    return None
-
-
-def _load_drive_token_config() -> dict | None:
-    """Load the authorized-user token from env first, then local token.json."""
-    env_value = (
-        os.getenv(DRIVE_TOKEN_ENV, "").strip()
-        or os.getenv(DRIVE_TOKEN_ENV_LEGACY, "").strip()
-    )
-    if env_value:
-        return _decode_json_secret(env_value, "OAuth token")
-
-    if TOKEN_FILE.exists():
-        try:
-            payload = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                "Google Drive token.json could not be read."
-            ) from exc
-
-    return None
-
-
-def _drive_credentials_configured() -> bool:
-    return _load_drive_client_config() is not None
-
-
-def _drive_token_configured() -> bool:
-    return _load_drive_token_config() is not None
-
-
 def drive_oauth_available() -> bool:
-    return _drive_credentials_configured()
+    return CREDENTIALS_FILE.exists()
 
 
 def drive_oauth_selected() -> bool:
@@ -1030,8 +931,8 @@ def drive_oauth_selected() -> bool:
     "Google Drive API" checkbox.
     """
     return (
-        _drive_credentials_configured()
-        and _drive_token_configured()
+        CREDENTIALS_FILE.exists()
+        and TOKEN_FILE.exists()
         and bool(
             normalize_drive_folder_id(
                 API_KEY_STATE.get("drive_folder_id", "")
@@ -1042,37 +943,26 @@ def drive_oauth_selected() -> bool:
 
 
 def get_drive_service():
-    """Return an authenticated Google Drive service.
-
-    Local development keeps using backend/credentials.json and backend/token.json.
-    Railway can instead provide those same JSON documents through
-    GOOGLE_OAUTH_CREDENTIALS_JSON and GOOGLE_OAUTH_TOKEN_JSON.
-    """
-    client_config = _load_drive_client_config()
-    if not client_config:
+    if not CREDENTIALS_FILE.exists():
         raise RuntimeError(
-            "Google Drive OAuth credentials were not found. Provide "
-            "backend/credentials.json locally or set GOOGLE_OAUTH_CREDENTIALS_JSON on Railway."
-        )
-
-    token_config = _load_drive_token_config()
-    if not token_config:
-        raise RuntimeError(
-            "Google Drive OAuth token was not found. Provide backend/token.json locally "
-            "or set GOOGLE_OAUTH_TOKEN_JSON on Railway."
+            "Google Drive OAuth credentials.json was not found in the backend folder."
         )
 
     credentials = None
 
-    try:
-        credentials = Credentials.from_authorized_user_info(
-            token_config,
-            DRIVE_SCOPES,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Google Drive token.json/OAuth token is invalid or incomplete."
-        ) from exc
+    if TOKEN_FILE.exists():
+        try:
+            # Load the existing authorized-user token without forcing a new
+            # scope onto the refresh request. The token already contains the
+            # scopes that were granted during the original OAuth consent.
+            # Supplying DRIVE_SCOPES here can make Google reject an otherwise
+            # valid refresh token with `invalid_scope`.
+            token_config = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+            credentials = Credentials.from_authorized_user_info(token_config)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to load Google Drive OAuth token.json: {exc}"
+            ) from exc
 
     if credentials and credentials.valid:
         return build(
@@ -1084,31 +974,26 @@ def get_drive_service():
     if credentials and credentials.expired and credentials.refresh_token:
         try:
             credentials.refresh(GoogleAuthRequest())
-
-            # Keep the old local behavior: refreshed credentials are persisted
-            # when token.json exists. On Railway, secrets come from environment
-            # variables, so do not attempt to write them into the container.
-            if not os.getenv(DRIVE_TOKEN_ENV, "").strip():
-                TOKEN_FILE.write_text(
-                    credentials.to_json(),
-                    encoding="utf-8",
-                )
-
+            TOKEN_FILE.write_text(
+                credentials.to_json(),
+                encoding="utf-8",
+            )
             return build(
                 "drive",
                 "v3",
                 credentials=credentials,
             )
         except Exception as exc:
+            # Do not mislabel every refresh failure as an expired token.
+            # Preserve the real Google OAuth error so the actual problem can
+            # be diagnosed without asking the user to re-authorize blindly.
             raise RuntimeError(
-                "Google Drive authorization has expired and could not be refreshed. "
-                "Verify GOOGLE_OAUTH_TOKEN_JSON on Railway or run "
-                "'python test_google_drive.py' locally to authorize again."
+                f"Google Drive OAuth refresh failed: {exc}"
             ) from exc
 
     raise RuntimeError(
-        "Google Drive is not authorized yet. Provide a valid authorized-user token "
-        "through backend/token.json locally or GOOGLE_OAUTH_TOKEN_JSON on Railway."
+        "Google Drive is not authorized yet. Run 'python test_google_drive.py' "
+        "once from the backend folder, then restart the backend."
     )
 
 
@@ -1146,21 +1031,19 @@ def require_drive_configuration():
             ),
         )
 
-    if not _drive_credentials_configured():
+    if not CREDENTIALS_FILE.exists():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Drive OAuth credentials were not configured. Provide "
-                "backend/credentials.json locally or set GOOGLE_OAUTH_CREDENTIALS_JSON on Railway."
+                "Google Drive credentials.json was not found in the backend folder."
             ),
         )
 
-    if not _drive_token_configured():
+    if not TOKEN_FILE.exists():
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Drive OAuth token was not configured. Provide backend/token.json locally "
-                "or set GOOGLE_OAUTH_TOKEN_JSON on Railway."
+                "Google Drive token.json was not found in the backend folder."
             ),
         )
 
@@ -1319,11 +1202,15 @@ def download_drive_file(
     # Make sure an expired access token is refreshed before the request.
     if not credentials.valid:
         if credentials.expired and credentials.refresh_token:
-            credentials.refresh(GoogleAuthRequest())
+            try:
+                credentials.refresh(GoogleAuthRequest())
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Google Drive OAuth refresh failed while downloading the reference: {exc}"
+                ) from exc
         else:
             raise RuntimeError(
-                "Google Drive authorization is not valid. "
-                "Run 'python test_google_drive.py' once to authorize again."
+                "Google Drive authorization is not valid and no refresh token is available."
             )
 
     from google.auth.transport.requests import AuthorizedSession
@@ -1439,7 +1326,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://frontend-production-14d5.up.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -1802,69 +1688,6 @@ def api_key_status():
 
 
 # -------------------------------------------------------------------
-# Google Drive output-folder configuration
-# -------------------------------------------------------------------
-
-@app.get("/api/drive/folders")
-def get_drive_folders():
-    """Return the configured Google Drive parent/output folders.
-
-    The frontend uses this endpoint only for the Save-to-Drive folder picker.
-    It does not expose OAuth secrets or API-key values.
-    """
-    folder_id, folder_name = require_drive_configuration()
-
-    try:
-        service = get_drive_service()
-        resolved_parent_id = resolve_drive_folder_id(
-            service,
-            folder_id,
-            folder_name,
-        )
-
-        # Keep the configured parent as the selectable folder. The actual
-        # generated image is always placed in its `outputs` child folder.
-        parent_name = str(folder_name or "").strip()
-        if not parent_name:
-            metadata = service.files().get(
-                fileId=resolved_parent_id,
-                fields="id,name",
-            ).execute()
-            parent_name = str(metadata.get("name") or "Google Drive folder")
-
-        outputs_folder_id = ensure_drive_outputs_folder(
-            service,
-            resolved_parent_id,
-        )
-
-        API_KEY_STATE["drive_folder_id"] = resolved_parent_id
-        API_KEY_STATE["drive_folder_name"] = parent_name
-        API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
-        API_KEY_STATE["drive_output_folder_name"] = "outputs"
-        persist_drive_configuration()
-
-        return {
-            "success": True,
-            "folders": [
-                {
-                    "id": resolved_parent_id,
-                    "name": parent_name,
-                    "label": parent_name,
-                }
-            ],
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        print("Google Drive folder loading failed:", repr(exc))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unable to load configured Google Drive output folders: {exc}",
-        ) from exc
-
-
-# -------------------------------------------------------------------
 # Google Drive input files
 # -------------------------------------------------------------------
 
@@ -2191,6 +2014,101 @@ def health():
 @app.get("/api/inputs")
 def get_inputs():
     return get_input_files()
+
+
+# -------------------------------------------------------------------
+# Configured Google Drive output/reference folders
+# -------------------------------------------------------------------
+
+@app.get("/api/drive/folders")
+def get_configured_drive_folders():
+    """
+    Return the configured Google Drive parent folders that the current
+    application can access. This endpoint is used by the frontend folder
+    picker before saving generated images.
+
+    It supports both the newer persisted `drive_output_folders` list and the
+    original single `drive_folder_id` / `drive_folder_name` configuration.
+    It never creates a fake Google Drive API key.
+    """
+    try:
+        load_persisted_drive_configuration()
+
+        configured = API_KEY_STATE.get("drive_output_folders", [])
+        if not isinstance(configured, list):
+            configured = []
+
+        # Backward compatibility with the existing single-folder config.
+        if not configured:
+            folder_id = normalize_drive_folder_id(
+                API_KEY_STATE.get("drive_folder_id", "")
+            )
+            folder_name = str(
+                API_KEY_STATE.get("drive_folder_name", "")
+            ).strip()
+            if folder_id or folder_name:
+                configured = [{"id": folder_id, "name": folder_name}]
+
+        if not configured:
+            return {"folders": []}
+
+        service = get_drive_service()
+        result = []
+
+        for index, folder in enumerate(configured, start=1):
+            if not isinstance(folder, dict):
+                continue
+
+            folder_id = normalize_drive_folder_id(
+                str(folder.get("id", "") or "")
+            )
+            folder_name = str(
+                folder.get("name", "") or ""
+            ).strip()
+
+            if not folder_id and not folder_name:
+                continue
+
+            resolved_id = resolve_drive_folder_id(
+                service,
+                folder_id,
+                folder_name,
+            )
+
+            metadata = _drive_folder_metadata(service, resolved_id)
+            resolved_name = str(
+                metadata.get("name")
+                or folder_name
+                or f"Google Drive Folder {index}"
+            ).strip()
+
+            result.append({
+                "id": resolved_id,
+                "name": resolved_name,
+                "label": resolved_name,
+            })
+
+        if result:
+            API_KEY_STATE["drive_output_folders"] = [
+                {"id": item["id"], "name": item["name"]}
+                for item in result
+            ]
+            API_KEY_STATE["drive_folder_id"] = result[0]["id"]
+            API_KEY_STATE["drive_folder_name"] = result[0]["name"]
+            persist_drive_configuration()
+
+        return {"folders": result}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to load configured Google Drive output folders: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
 
 
 # -------------------------------------------------------------------
@@ -2655,6 +2573,202 @@ def tag_all_input_files():
 IMAGE_OUTPUT_DIR = BASE_DIR / "output" / "images"
 IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Social-media description files deliberately use the SAME local output
+# directory as generated images. No separate Drive folder is created.
+SOCIAL_MEDIA_ACCOUNTS = {
+    "LinkedIn": {
+        "tag": "@Meera Marrakula",
+        "url": "https://www.linkedin.com/in/meera-marrakula/",
+    },
+    "Facebook": {
+        "tag": "@Tinitiate AI",
+        "url": "https://www.facebook.com/profile.php?id=61589182754060",
+    },
+    "Instagram": {
+        "tag": "@tinitiate.ai",
+        "url": "https://www.instagram.com/tinitiate.ai/",
+    },
+}
+
+def _safe_social_media_name(image_filename: str) -> str:
+    """Return the matching TXT filename for a generated image."""
+    stem = Path(image_filename or "generated").stem
+    return f"{stem}_description.txt"
+
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\S+", str(text or "")))
+
+def _trim_social_copy(text: str, max_chars: int) -> str:
+    text = re.sub(r"\n{3,}", "\n\n", str(text or "").strip())
+    if len(text) <= max_chars:
+        return text
+    clipped = text[: max_chars - 1].rsplit(" ", 1)[0].rstrip()
+    return clipped + "…"
+
+def _extract_chat_text(result: dict, provider_name: str) -> str:
+    """Extract text from common chat-completions response shapes."""
+    return _chat_response_text(result, provider_name).strip()
+
+def _pipeline_social_text(pipeline_item: dict, instruction: str) -> str:
+    """Generate social copy with the currently selected text-capable pipeline."""
+    service = str(pipeline_item.get("service") or "").strip().lower()
+    model = _provider_text_model(pipeline_item)
+    api_key = str(pipeline_item.get("value") or "").strip()
+    if not api_key:
+        raise RuntimeError("The selected pipeline API key is empty.")
+    if not model:
+        raise RuntimeError("The selected API key has no text-generation model configured.")
+
+    if service == "openrouter":
+        result = _openrouter_request(
+            api_key,
+            "chat/completions",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You write platform-specific social-media captions. Follow the requested format and limits exactly. Keep emojis/icons and tags."},
+                    {"role": "user", "content": instruction},
+                ],
+                "temperature": 0.7,
+            },
+        )
+        return _extract_chat_text(result, "OpenRouter")
+
+    if service == "gemini":
+        def call_gemini():
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=model,
+                contents=instruction,
+            )
+            text = getattr(response, "text", None)
+            if text:
+                return str(text).strip()
+            raise RuntimeError("Gemini returned no text for the social-media description.")
+        return _with_pipeline_key(pipeline_item, call_gemini)
+
+    result = _generic_request(
+        pipeline_item,
+        "chat/completions",
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You write platform-specific social-media captions. Follow the requested format and limits exactly. Keep emojis/icons and tags."},
+                {"role": "user", "content": instruction},
+            ],
+            "temperature": 0.7,
+        },
+    )
+    return _extract_chat_text(result, str(pipeline_item.get("display_name") or "API"))
+
+def _build_social_media_description(prompt: str, template_json: str, image_filename: str, pipeline_item: dict) -> str:
+    """Create platform-specific social-media descriptions for one generated image."""
+    safe_prompt = re.sub(r"\s+", " ", str(prompt or "").strip()) or "the generated image"
+    template_context = str(template_json or "").strip()[:10000]
+    instruction = f"""Create social-media copy for the generated image file '{image_filename}'.
+
+SOURCE CONTENT REQUEST:
+{safe_prompt}
+
+TEMPLATE CONTEXT:
+{template_context}
+
+Return exactly three platform sections. Use a heading on its own line for each section.
+The headings may be written as [LINKEDIN], LinkedIn:, **LinkedIn**, LinkedIn, or Markdown headings.
+Required sections: LinkedIn, Facebook, Instagram.
+
+Requirements:
+- Relate the copy to the generated image and source content request.
+- Do not invent claims, statistics, achievements, prices, dates, people, products or facts.
+- Use natural emojis/icons and include a clear call to action.
+- Include the supplied platform-specific tag and URL in its matching section.
+- LinkedIn: professional tone, approximately 120-180 words, maximum 3000 characters. Tag: {SOCIAL_MEDIA_ACCOUNTS['LinkedIn']['tag']} URL: {SOCIAL_MEDIA_ACCOUNTS['LinkedIn']['url']}
+- Facebook: friendly/community tone, approximately 80-120 words. Tag: {SOCIAL_MEDIA_ACCOUNTS['Facebook']['tag']} URL: {SOCIAL_MEDIA_ACCOUNTS['Facebook']['url']}
+- Instagram: concise visual-first tone, approximately 60-100 words, maximum 2200 characters. Tag: {SOCIAL_MEDIA_ACCOUNTS['Instagram']['tag']} URL: {SOCIAL_MEDIA_ACCOUNTS['Instagram']['url']}
+- Add relevant hashtags to each section.
+- Do not add explanations outside the three sections.
+"""
+    return _pipeline_social_text(pipeline_item, instruction).strip()
+
+
+def _fallback_social_descriptions(prompt: str) -> dict:
+    """Return deterministic descriptions if a text model returns unusable formatting."""
+    source = re.sub(r"\s+", " ", str(prompt or "").strip()) or "the generated image"
+    base = source[:500].rstrip(" .")
+    return {
+        "LinkedIn": {
+            "text": f"✨ {base}.\n\nA visual created from the requested reference and content direction.\n\n{SOCIAL_MEDIA_ACCOUNTS['LinkedIn']['tag']}\n{SOCIAL_MEDIA_ACCOUNTS['LinkedIn']['url']}\n\nExplore the idea and share your thoughts.\n#AI #Design #CreativeTechnology",
+            "character_limit": 3000,
+        },
+        "Facebook": {
+            "text": f"✨ {base}.\n\nCreated from the requested visual direction. {SOCIAL_MEDIA_ACCOUNTS['Facebook']['tag']}\n{SOCIAL_MEDIA_ACCOUNTS['Facebook']['url']}\n\nWhat do you think? Share your thoughts below!\n#AI #Design #Creativity",
+            "character_limit": 10000,
+        },
+        "Instagram": {
+            "text": f"✨ {base}.\n\n{SOCIAL_MEDIA_ACCOUNTS['Instagram']['tag']} {SOCIAL_MEDIA_ACCOUNTS['Instagram']['url']}\n\nSave this idea and share it with your network.\n#AI #Design #CreativeTech #VisualDesign",
+            "character_limit": 2200,
+        },
+    }
+
+def _parse_social_descriptions(raw: str, prompt: str) -> dict:
+    """Parse common heading styles returned by different text providers."""
+    text = str(raw or "").replace("\r\n", "\n").strip()
+    if not text:
+        return _fallback_social_descriptions(prompt)
+
+    lines = text.split("\n")
+    sections = []
+    current = None
+    buffer = []
+    aliases = {"linkedin": "LinkedIn", "facebook": "Facebook", "instagram": "Instagram"}
+
+    def flush():
+        nonlocal current, buffer
+        if current:
+            body = "\n".join(buffer).strip(" \n:-*#")
+            if body:
+                sections.append((current, body))
+        buffer = []
+
+    for line in lines:
+        stripped = line.strip()
+        normalized = re.sub(r"^[#*\s\-\d\.\)\[]+", "", stripped)
+        normalized = re.sub(r"[\]*#*:：]+$", "", normalized).strip()
+        lower = normalized.lower()
+        matched = next((key for key in aliases if lower == key or lower.startswith(key + ":")), None)
+        if matched:
+            flush()
+            current = aliases[matched]
+            remainder = normalized[len(matched):].lstrip(" :：*-#[]")
+            if remainder:
+                buffer.append(remainder)
+        else:
+            if current is not None:
+                buffer.append(line)
+    flush()
+
+    parsed = {}
+    limits = {"LinkedIn": 3000, "Facebook": 10000, "Instagram": 2200}
+    for platform, body in sections:
+        body = _trim_social_copy(body, limits[platform])
+        if body:
+            parsed[platform] = {
+                "text": body,
+                "character_count": len(body),
+                "character_limit": limits[platform],
+            }
+
+    if len(parsed) >= 2:
+        return parsed
+    if len(parsed) == 1:
+        only = next(iter(parsed.values()))["text"]
+        fallback = _fallback_social_descriptions(prompt)
+        fallback[ next(iter(parsed.keys())) ] = parsed[next(iter(parsed.keys()))]
+        return fallback
+    return _fallback_social_descriptions(prompt)
+
+
 def _safe_output_name(filename: str) -> str:
     import uuid
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(filename or "generated").stem).strip("_") or "generated"
@@ -2736,47 +2850,85 @@ async def generate_output_image(
     content_type: str = Form(""),
     prompt: str = Form(...),
     template_json: str = Form("{}"),
+    references_json: str = Form("[]"),
 ):
+    """Generate the final image directly from the selected reference + manual prompt.
+
+    Template generation and AI prompt generation are intentionally disabled.
+    Multiple selected image-capable credentials are tried in order until one
+    successfully produces the final image.
+    """
     if not prompt.strip():
         raise HTTPException(
             status_code=400,
             detail="Enter a content prompt before generating the output image.",
         )
 
-    key_id, item = _require_pipeline_key()
+    # Resolve the reference once. The existing multi-reference payload is kept
+    # for compatibility; the current image pipeline uses the primary reference.
     reference_path, _ = _resolve_generation_reference(
         source_type, source, filename, content_type
     )
-    instruction = _generation_instruction(prompt, template_json)
+    instruction = _generation_instruction(prompt, "{}")
 
-    try:
-        image_bytes, image_model = _pipeline_image(
-            item,
-            reference_path,
-            instruction,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Image generation failed using the selected pipeline API key "
-                f"'{item.get('display_name', key_id)}': {exc}"
-            ),
-        ) from exc
+    candidates = _selected_pipeline_candidates()
+    capable = [(key_id, item) for key_id, item in candidates if _pipeline_key_is_usable(item)]
+    if not capable:
+        # Reuse the normal selection validation so the frontend gets the same
+        # clear message as every other image-generation path.
+        _require_pipeline_key()
+        raise HTTPException(status_code=400, detail="No selected API key can generate the final image.")
+
+    errors: list[str] = []
+    image_bytes = None
+    image_model = ""
+    selected_key_id = ""
+    selected_item: dict | None = None
+
+    for key_id, item in capable:
+        try:
+            candidate_bytes, candidate_model = _pipeline_image(
+                item,
+                reference_path,
+                instruction,
+            )
+            if candidate_bytes:
+                image_bytes = candidate_bytes
+                image_model = candidate_model
+                selected_key_id = key_id
+                selected_item = item
+                API_KEY_STATE["pipeline_key_id"] = key_id
+                break
+            errors.append(f"{item.get('display_name', key_id)}: provider returned no image data")
+        except Exception as exc:
+            errors.append(f"{item.get('display_name', key_id)}: {exc}")
+
+    if image_bytes is None or selected_item is None:
+        detail = "Image generation failed for all selected image-capable API keys."
+        if errors:
+            detail += " " + " | ".join(errors)
+        raise HTTPException(status_code=502, detail=detail)
 
     output_name = _safe_output_name(filename)
     (IMAGE_OUTPUT_DIR / output_name).write_bytes(image_bytes)
+
+    # Keep the immediate description feature available without introducing a
+    # second fragile network request. The social-media description stage remains
+    # available separately through /api/social-media/generate.
+    clean_prompt = re.sub(r"\s+", " ", prompt.strip())
+    description = f"Generated image based on the requested content: {clean_prompt}"
 
     return {
         "success": True,
         "image_url": f"/api/images/output/{quote(output_name)}",
         "filename": output_name,
         "model": image_model,
-        "provider": item.get("display_name", "Selected API"),
-        "api_id": key_id,
-        "pipeline_api_id": key_id,
+        "provider": selected_item.get("display_name", "Selected API"),
+        "api_id": selected_key_id,
+        "pipeline_api_id": selected_key_id,
         "selected_api_count": len(API_KEY_STATE.get("selected_ids", [])),
         "changes": {},
+        "description": description,
     }
 
 
@@ -2787,13 +2939,84 @@ def get_generated_image(filename: str):
     return FileResponse(path,media_type="image/png",filename=path.name)
 
 
-@app.post("/api/images/save-to-drive")
-def save_generated_image_to_drive(
-    filename: str = Form(...),
-    folder_id: str = Form(""),
+# -------------------------------------------------------------------
+# Canva Connect integration
+# -------------------------------------------------------------------
+
+@app.get("/api/canva/connect/oauth/status")
+async def canva_connect_oauth_status():
+    if canva_connect_service is None:
+        return {
+            "configured": False,
+            "authenticated": False,
+            "detail": "Canva Connect service is not installed. Place canva_connect_service.py under backend/app/services/.",
+        }
+    return await canva_connect_service.status()
+
+
+@app.get("/api/canva/connect/oauth/start")
+async def canva_connect_oauth_start():
+    if canva_connect_service is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Canva Connect service is not installed. Place canva_connect_service.py under backend/app/services/.",
+        )
+    try:
+        return {"authorization_url": canva_connect_service.authorization_url()}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/canva/connect/oauth/callback")
+async def canva_connect_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
 ):
-    """Save a generated local image into an `outputs` folder under the selected Drive folder."""
-    configured_folder_id, configured_folder_name = require_drive_configuration()
+    if canva_connect_service is None:
+        return HTMLResponse(
+            "<h2>Canva connection failed</h2><p>Canva Connect service is not installed.</p>",
+            status_code=500,
+        )
+    if error:
+        import html
+        message = html.escape(error_description or error)
+        return HTMLResponse(
+            f"<h2>Canva connection failed</h2><p>{message}</p>",
+            status_code=400,
+        )
+    if not code:
+        return HTMLResponse(
+            "<h2>Canva connection failed</h2><p>No authorization code was returned.</p>",
+            status_code=400,
+        )
+    try:
+        await canva_connect_service.exchange_code(code, state)
+        return HTMLResponse(
+            "<h2>Canva connected successfully</h2><p>You can close this window and return to the Image Generator.</p>",
+            status_code=200,
+        )
+    except Exception as exc:
+        import html
+        message = html.escape(str(exc))
+        return HTMLResponse(
+            f"<h2>Canva connection failed</h2><p>{message}</p>",
+            status_code=400,
+        )
+
+
+@app.post("/api/canva/create-from-generated-image")
+async def canva_create_from_generated_image(
+    filename: str = Form(...),
+    design_type: str = Form("poster"),
+):
+    if canva_connect_service is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Canva Connect service is not installed. Place canva_connect_service.py under backend/app/services/.",
+        )
+
     safe_name = Path(filename).name
     if not safe_name:
         raise HTTPException(status_code=400, detail="Generated image filename is required.")
@@ -2803,60 +3026,233 @@ def save_generated_image_to_drive(
         raise HTTPException(status_code=404, detail="Generated image was not found on the server.")
 
     try:
+        # The supplied previous Canva service intentionally uploads the local
+        # generated image directly; no public URL/tunnel is required.
+        result = await canva_connect_service.create_editable_design_from_local_image(local_path)
+        return {
+            **result,
+            "message": result.get(
+                "message",
+                "The generated image was uploaded to Canva and placed in a Canva design. Open it to edit.",
+            ),
+        }
+    except Exception as exc:
+        message = str(exc)
+        lowered = message.lower()
+        status = 401 if any(
+            phrase in lowered
+            for phrase in ("not authorized", "not configured", "authorization", "oauth", "connect first", "reconnect canva")
+        ) else 502
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@app.post("/api/social-media/generate")
+async def generate_social_media_description(
+    filename: str = Form(...),
+    prompt: str = Form(""),
+    template_json: str = Form("{}"),
+):
+    """Generate the optional LinkedIn/Facebook/Instagram TXT file after image generation."""
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Generated image filename is required.")
+
+    image_path = IMAGE_OUTPUT_DIR / safe_name
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Generated image was not found on the server.")
+
+    key_id, pipeline_item = _require_pipeline_key()
+    try:
+        content = _build_social_media_description(
+            prompt,
+            template_json,
+            safe_name,
+            pipeline_item,
+        )
+        descriptions = _parse_social_descriptions(content, prompt)
+        # Always persist the exact provider output for download, while returning
+        # normalized platform data so the frontend never has to guess heading formats.
+        description_name = _safe_social_media_name(safe_name)
+        description_path = IMAGE_OUTPUT_DIR / description_name
+        description_path.write_text(content, encoding="utf-8")
+        return {
+            "success": True,
+            "filename": safe_name,
+            "social_media_filename": description_name,
+            "social_media_file_url": f"/api/social-media/output/{quote(description_name)}",
+            "provider": pipeline_item.get("display_name", "Selected API"),
+            "model": _provider_text_model(pipeline_item),
+            "api_id": key_id,
+            "word_count": _word_count(content),
+            "content": content,
+            "descriptions": descriptions,
+            "message": "Social-media descriptions generated successfully.",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to generate the social-media description: {exc}") from exc
+
+
+@app.get("/api/social-media/output/{filename}")
+def get_social_media_file(filename: str):
+    path = IMAGE_OUTPUT_DIR / Path(filename).name
+    if not path.exists() or not path.is_file() or path.suffix.lower() != ".txt":
+        raise HTTPException(status_code=404, detail="Social-media text file was not found.")
+    return FileResponse(path, media_type="text/plain; charset=utf-8", filename=path.name)
+
+
+@app.get("/api/drive/folders")
+def get_configured_drive_folders():
+    """Return the configured Google Drive output folder and its outputs child."""
+    require_drive_configuration()
+    try:
         service = get_drive_service()
-        requested_folder_id = normalize_drive_folder_id(folder_id)
-        parent_folder_id = requested_folder_id or resolve_drive_folder_id(
+        parent_id = resolve_drive_folder_id(
             service,
-            configured_folder_id,
-            configured_folder_name,
+            normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
+            str(API_KEY_STATE.get("drive_folder_name", "") or ""),
+        )
+        parent_meta = service.files().get(
+            fileId=parent_id,
+            fields="id,name,mimeType",
+        ).execute()
+        outputs_id = ensure_drive_outputs_folder(service, parent_id)
+        outputs_meta = service.files().get(
+            fileId=outputs_id,
+            fields="id,name,mimeType",
+        ).execute()
+        API_KEY_STATE["drive_folder_id"] = str(parent_meta.get("id") or parent_id)
+        API_KEY_STATE["drive_folder_name"] = str(parent_meta.get("name") or API_KEY_STATE.get("drive_folder_name") or "Google Drive")
+        API_KEY_STATE["drive_output_folder_id"] = str(outputs_meta.get("id") or outputs_id)
+        API_KEY_STATE["drive_output_folder_name"] = str(outputs_meta.get("name") or "outputs")
+        persist_drive_configuration()
+        return {
+            "folders": [
+                {
+                    "id": API_KEY_STATE["drive_output_folder_id"],
+                    "name": API_KEY_STATE["drive_output_folder_name"],
+                    "label": f"{API_KEY_STATE['drive_folder_name']} / {API_KEY_STATE['drive_output_folder_name']}",
+                }
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to load configured Google Drive output folders: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+@app.post("/api/images/save-to-drive")
+def save_generated_image_to_drive(filename: str = Form(...)):
+    """Save the generated image and its optional description TXT consecutively in ONE Drive outputs folder."""
+    require_drive_configuration()
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Generated image filename is required.")
+
+    local_path = IMAGE_OUTPUT_DIR / safe_name
+    if not local_path.exists() or not local_path.is_file():
+        raise HTTPException(status_code=404, detail="Generated image was not found on the server.")
+
+    description_name = _safe_social_media_name(safe_name)
+    description_path = IMAGE_OUTPUT_DIR / description_name
+    if not description_path.exists() or not description_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail="Generate the social-media description file first, then save the image to Google Drive.",
+        )
+
+    try:
+        service = get_drive_service()
+        parent_folder_id = resolve_drive_folder_id(
+            service,
+            normalize_drive_folder_id(API_KEY_STATE.get("drive_folder_id", "")),
+            str(API_KEY_STATE.get("drive_folder_name", "") or ""),
         )
         outputs_folder_id = ensure_drive_outputs_folder(service, parent_folder_id)
         API_KEY_STATE["drive_output_folder_id"] = outputs_folder_id
         API_KEY_STATE["drive_output_folder_name"] = "outputs"
         persist_drive_configuration()
 
-        # Avoid creating duplicate files with the same name on repeated clicks.
-        existing = service.files().list(
+        # Both files are uploaded to the SAME existing outputs folder.
+        # The TXT name shares the image's base name so Drive keeps the pair
+        # adjacent when sorted by name: image.png -> image_description.txt.
+        escaped_image_name = safe_name.replace(chr(39), chr(92) + chr(39))
+        existing_image = service.files().list(
             q=(
                 f"'{outputs_folder_id}' in parents "
-                f"and name = '{safe_name.replace(chr(39), chr(92)+chr(39))}' "
+                f"and name = '{escaped_image_name}' "
                 "and trashed = false"
             ),
             pageSize=10,
             fields="files(id,name,webViewLink)",
         ).execute().get("files", [])
 
-        media = MediaIoBaseUpload(
+        image_media = MediaIoBaseUpload(
             io.BytesIO(local_path.read_bytes()),
             mimetype="image/png",
             resumable=False,
         )
-
-        if existing:
-            drive_file = service.files().update(
-                fileId=existing[0]["id"],
-                media_body=media,
+        if existing_image:
+            drive_image = service.files().update(
+                fileId=existing_image[0]["id"],
+                media_body=image_media,
                 fields="id,name,webViewLink",
             ).execute()
         else:
-            drive_file = service.files().create(
+            drive_image = service.files().create(
                 body={"name": safe_name, "parents": [outputs_folder_id]},
-                media_body=media,
+                media_body=image_media,
+                fields="id,name,webViewLink",
+            ).execute()
+
+        escaped_description_name = description_name.replace(chr(39), chr(92) + chr(39))
+        existing_description = service.files().list(
+            q=(
+                f"'{outputs_folder_id}' in parents "
+                f"and name = '{escaped_description_name}' "
+                "and trashed = false"
+            ),
+            pageSize=10,
+            fields="files(id,name,webViewLink)",
+        ).execute().get("files", [])
+
+        text_media = MediaIoBaseUpload(
+            io.BytesIO(description_path.read_bytes()),
+            mimetype="text/plain",
+            resumable=False,
+        )
+        if existing_description:
+            drive_description = service.files().update(
+                fileId=existing_description[0]["id"],
+                media_body=text_media,
+                fields="id,name,webViewLink",
+            ).execute()
+        else:
+            drive_description = service.files().create(
+                body={"name": description_name, "parents": [outputs_folder_id]},
+                media_body=text_media,
                 fields="id,name,webViewLink",
             ).execute()
 
         return {
             "success": True,
             "filename": safe_name,
-            "drive_file_id": drive_file.get("id", ""),
+            "social_media_filename": description_name,
+            "drive_file_id": drive_image.get("id", ""),
+            "drive_text_file_id": drive_description.get("id", ""),
             "drive_folder": "outputs",
-            "drive_url": drive_file.get("webViewLink", ""),
-            "message": "Generated image saved to Google Drive/outputs.",
+            "drive_url": drive_image.get("webViewLink", ""),
+            "drive_text_url": drive_description.get("webViewLink", ""),
+            "message": "Image and its social-media description were saved consecutively in Google Drive/outputs.",
         }
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unable to save generated image to Google Drive: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Unable to save generated image and description to Google Drive: {exc}") from exc
 
 
 # Generate AI prompt from reference
