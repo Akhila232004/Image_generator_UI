@@ -12,14 +12,13 @@ import type {
 
 import "./App.css";
 
+import { generateTemplate } from "./services/templateService";
 import type {
   GenerateTemplateResponse,
 } from "./services/templateService";
 
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
-).replace(/\/+$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 
 
 function resolveApiUrl(url: string): string {
@@ -42,8 +41,6 @@ type ReferenceType =
   | "image"
   | "gif"
   | "pdf"
-  | "ppt"
-  | "pptx"
   | "video"
   | "youtube"
   | "image-link";
@@ -104,14 +101,6 @@ function getReferenceType(
     return "pdf";
   }
 
-  if (normalizedExtension === ".ppt") {
-    return "ppt";
-  }
-
-  if (normalizedExtension === ".pptx") {
-    return "pptx";
-  }
-
   if (
     normalizedExtension === ".mp4" ||
     normalizedExtension === ".webm" ||
@@ -164,6 +153,34 @@ function isImageUrl(url: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+
+function formatReferenceType(
+  type: ReferenceType,
+): string {
+  switch (type) {
+    case "image":
+      return "Image";
+
+    case "gif":
+      return "GIF";
+
+    case "pdf":
+      return "PDF";
+
+    case "video":
+      return "Video";
+
+    case "youtube":
+      return "YouTube";
+
+    case "image-link":
+      return "Image Link";
+
+    default:
+      return "Reference";
   }
 }
 
@@ -424,9 +441,7 @@ function ApiKeySetup({
                 "application/json",
             },
             body: JSON.stringify({
-              // Start the Image Generator with all uploaded AI keys selected.
-              // The user can then deselect any key(s) from the header.
-              selected_ids: apiKeys.map((api) => api.id),
+              selected_ids: [],
             }),
             credentials: "include",
           },
@@ -453,10 +468,8 @@ function ApiKeySetup({
           keyName: api.keyName,
         }));
 
-      // Keep all uploaded AI keys selected initially. The Image Generator
-      // header still allows the user to select/deselect multiple keys.
       onComplete(
-        apiKeys.map((api) => api.id),
+        [],
         selectedServices,
       );
 
@@ -1441,6 +1454,7 @@ function getApiServiceIcon(
 
 function ImageGenerator({
   selectedApiKeys,
+  selectedApiServices,
   availableApiServices,
   onApiSelectionChange,
   onBackToApiSetup,
@@ -1477,15 +1491,24 @@ function ImageGenerator({
       "manual",
     );
 
+  const [isGeneratingPrompt, setIsGeneratingPrompt] =
+    useState(false);
+
   const [templateResult, setTemplateResult] =
     useState<GenerateTemplateResponse | null>(
       null,
     );
 
-  const [promptApiProvider] =
+  const [templateApiProvider, setTemplateApiProvider] =
     useState("");
 
-  const [promptApiModel] =
+  const [templateApiModel, setTemplateApiModel] =
+    useState("");
+
+  const [promptApiProvider, setPromptApiProvider] =
+    useState("");
+
+  const [promptApiModel, setPromptApiModel] =
     useState("");
 
   const [generatedImageUrl, setGeneratedImageUrl] =
@@ -1509,25 +1532,26 @@ function ImageGenerator({
   const [generatedImageSaveMessage, setGeneratedImageSaveMessage] =
     useState("");
 
-  const [canvaEditUrl, setCanvaEditUrl] = useState("");
-  const [canvaDesignId, setCanvaDesignId] = useState("");
-  const [isCreatingCanvaDesign, setIsCreatingCanvaDesign] = useState(false);
-  const [canvaMessage, setCanvaMessage] = useState("");
-  const [canvaAiCommand, setCanvaAiCommand] = useState("");
-  const [canvaAiTransactionId, setCanvaAiTransactionId] = useState("");
-  const [canvaAiPreviewUrl, setCanvaAiPreviewUrl] = useState("");
-  const [isCanvaAiEditing, setIsCanvaAiEditing] = useState(false);
-  const [canvaAiMessage, setCanvaAiMessage] = useState("");
-  const [isSavingEnhancedToDrive, setIsSavingEnhancedToDrive] = useState(false);
-  const [enhancedImageSaved, setEnhancedImageSaved] = useState(false);
-
   const [driveOutputFolders, setDriveOutputFolders] = useState<DriveOutputFolder[]>([]);
   const [selectedOutputFolderId, setSelectedOutputFolderId] = useState("");
   const [isOutputFolderPickerOpen, setIsOutputFolderPickerOpen] = useState(false);
-  const [outputSaveMode, setOutputSaveMode] = useState<"generated" | "enhanced">("generated");
 
   const [generatedTextChanges, setGeneratedTextChanges] =
     useState<Record<string, string>>({});
+
+  // Social-media description output is intentionally a separate stage after
+  // final image generation. It does not change the existing image pipeline.
+  const [socialDescriptions, setSocialDescriptions] =
+    useState<Record<string, { text: string; character_count: number; character_limit: number }>>({});
+  const [isGeneratingSocialDescriptions, setIsGeneratingSocialDescriptions] =
+    useState(false);
+  const [socialDescriptionError, setSocialDescriptionError] = useState("");
+  const [isSocialDescriptionPreviewOpen, setIsSocialDescriptionPreviewOpen] =
+    useState(false);
+  const [isSavingSocialDescriptions, setIsSavingSocialDescriptions] =
+    useState(false);
+  const [socialDescriptionSaved, setSocialDescriptionSaved] = useState(false);
+  const [socialDescriptionSaveMessage, setSocialDescriptionSaveMessage] = useState("");
 
   const [isGeneratingImage, setIsGeneratingImage] =
     useState(false);
@@ -1538,7 +1562,8 @@ function ImageGenerator({
   const [isTaggingImages, setIsTaggingImages] =
     useState(false);
 
-  const isGeneratingTemplate = false;
+  const [isGeneratingTemplate, setIsGeneratingTemplate] =
+    useState(false);
 
   const [previewUrls, setPreviewUrls] =
     useState<Record<string, string>>({});
@@ -1848,7 +1873,7 @@ function ImageGenerator({
         (url) => {
 
           URL.revokeObjectURL(
-            url as string,
+            url,
           );
 
         },
@@ -1881,42 +1906,12 @@ function ImageGenerator({
 
     try {
 
-      // The backend keeps API selection in memory. After a backend restart,
-      // the browser can still have the selected IDs in its session state,
-      // so synchronize them before starting any AI operation. This also
-      // prevents a race between restoring the UI selection and /tag-all.
-      if (selectedApiKeys.length === 0) {
-        throw new Error(
-          "No API key is selected. Select at least one API key before using the AI pipeline.",
-        );
-      }
-
-      const selectionResponse = await fetch(
-        `${API_BASE_URL}/api/api-keys/select`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ selected_ids: selectedApiKeys }),
-          credentials: "include",
-        },
-      );
-
-      const selectionData = await selectionResponse.json().catch(() => null);
-      if (!selectionResponse.ok) {
-        throw new Error(
-          String(
-            selectionData?.detail ||
-              "Unable to synchronize the selected API keys.",
-          ),
-        );
-      }
-
       const response =
         await fetch(
           `${API_BASE_URL}/api/inputs/tag-all`,
           {
             method: "POST",
-            credentials: "include",
+          credentials: "include",
           },
         );
 
@@ -2259,11 +2254,18 @@ function ImageGenerator({
     setGeneratedImageProvider("");
     setGeneratedImageSaved(false);
     setGeneratedImageSaveMessage("");
+    setSocialDescriptions({});
+    setSocialDescriptionError("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
     setError("");
 
     // Template generation is disabled. Selected references are passed
     // directly to image generation and addressed by their numbers.
     setTemplateResult(null);
+    setTemplateApiProvider("");
+    setTemplateApiModel("");
   }
 
 
@@ -2549,63 +2551,52 @@ function ImageGenerator({
 
 
     /*
-     * Video/YouTube remain browser-local references. PDF/PPT/PPTX are now
-     * persisted by the backend so Canva Connect can import the original file
-     * bytes directly and preserve editable document elements where supported.
+     * Keep PDF/video uploads
+     * as local references.
      */
 
-    if (type === "pdf" || type === "ppt" || type === "pptx") {
-      setIsTaggingImages(false);
-      setError("");
-      const formData = new FormData();
-      formData.append("file", file);
+    const objectUrl =
+      URL.createObjectURL(
+        file,
+      );
 
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/inputs/upload`, {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok) {
-          throw new Error(String(data?.detail || "Unable to upload the document reference."));
-        }
 
-        setSelectedInputIds([]);
-        setTemplateResult(null);
-        setReference({
-          type,
-          name: String(data.name || file.name),
-          url: `${API_BASE_URL}${String(data.url || "")}`,
-          size: Number(data.size || file.size),
-          mimeType: String(data.mimeType || file.type || "application/octet-stream"),
-          source: "upload",
-          sourceId: String(data.id || data.name || file.name),
-        });
-        await loadInputFiles();
-        setShowReferenceModal(false);
-        setShowUrlInput(false);
-      } catch (err) {
-        console.error("Document reference upload failed:", err);
-        setError(err instanceof Error ? err.message : "Unable to upload the document reference.");
-      }
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(file);
     setSelectedInputIds([]);
-    setTemplateResult(null);
+
+    setTemplateResult(
+      null,
+    );
+
     setError("");
+
+
     setReference({
       type,
-      name: file.name,
-      url: objectUrl,
-      size: file.size,
-      mimeType: file.type,
-      source: "upload",
+
+      name:
+        file.name,
+
+      url:
+        objectUrl,
+
+      size:
+        file.size,
+
+      mimeType:
+        file.type,
+
+      source:
+        "upload",
     });
-    setShowReferenceModal(false);
-    setShowUrlInput(false);
+
+
+    setShowReferenceModal(
+      false,
+    );
+
+    setShowUrlInput(
+      false,
+    );
   }
 
 
@@ -2798,9 +2789,190 @@ function ImageGenerator({
 
 
   /*
-   * Template generation is intentionally disabled in the current image
-   * generation flow. The template state is retained for the existing UI.
+   * ------------------------------------------------------------
+   * Remove reference
+   * ------------------------------------------------------------
    */
+
+  function handleRemoveReference() {
+
+    if (
+      reference?.source ===
+        "upload" &&
+      reference.url.startsWith(
+        "blob:",
+      )
+    ) {
+
+      URL.revokeObjectURL(
+        reference.url,
+      );
+    }
+
+
+    setReference(
+      null,
+    );
+
+    setSelectedInputIds([]);
+
+    setTemplatePrompt(
+      "",
+    );
+
+    setPromptMode(
+      "manual",
+    );
+
+    setTemplateResult(
+      null,
+    );
+
+    setGeneratedImageUrl("");
+    setGeneratedImageFilename("");
+    setGeneratedImageModel("");
+
+    setError("");
+  }
+
+
+  /*
+   * ------------------------------------------------------------
+   * Automatic template generation
+   * ------------------------------------------------------------
+   */
+
+  async function generateTemplateForReference(
+    currentReference: ReferenceData,
+  ) {
+
+    if (selectedApiKeys.length === 0) {
+      setTemplateResult(null);
+      setTemplateApiProvider("");
+      setTemplateApiModel("");
+      return;
+    }
+
+    if (
+      currentReference.type ===
+        "pdf" ||
+      currentReference.type ===
+        "video"
+    ) {
+
+      setTemplateResult(
+        null,
+      );
+
+
+      setError(
+        "Template generation currently supports images, GIFs and YouTube references.",
+      );
+
+
+      return;
+    }
+
+
+    setError("");
+
+    setIsGeneratingTemplate(
+      true,
+    );
+
+    setTemplateResult(
+      null,
+    );
+    setTemplateApiProvider("");
+    setTemplateApiModel("");
+
+
+    try {
+
+      const result =
+        await generateTemplate({
+          type:
+            currentReference.type,
+
+          name:
+            currentReference.name,
+
+          /*
+           * `url` is only the browser preview URL.
+           * `sourceId` is the value the backend uses to locate the
+           * actual reference.
+           */
+          url:
+            currentReference.url,
+
+          source:
+            currentReference.source as any,
+
+          sourceId:
+            currentReference.sourceId,
+
+          mimeType:
+            currentReference.mimeType,
+        });
+
+
+      setTemplateResult(
+        result,
+      );
+
+      const templateMetadata = result as GenerateTemplateResponse & {
+        provider?: string;
+        model?: string;
+      };
+      setTemplateApiProvider(String(templateMetadata.provider || ""));
+      setTemplateApiModel(String(templateMetadata.model || ""));
+
+    } catch (err) {
+
+      console.error(
+        "Automatic template generation failed:",
+        err,
+      );
+
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to generate template from the reference.",
+      );
+
+    } finally {
+
+      setIsGeneratingTemplate(
+        false,
+      );
+    }
+  }
+
+
+  /*
+   * ------------------------------------------------------------
+   * Template generation temporarily disabled
+   * ------------------------------------------------------------
+   * Keep the existing template state/functions in place so the feature
+   * can be re-enabled later, but do not invoke the template-generation
+   * pipeline anywhere in the current flow.
+   */
+
+
+  /*
+   * ------------------------------------------------------------
+   * Generate AI prompt
+   * ------------------------------------------------------------
+   */
+
+  function handleGeneratePrompt() {
+    setIsGeneratingPrompt(false);
+    setPromptMode("manual");
+    setPromptApiProvider("");
+    setPromptApiModel("");
+    setError("AI prompt generation is temporarily disabled. Enter the content prompt manually.");
+  }
 
   /*
    * ------------------------------------------------------------
@@ -2808,115 +2980,13 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-  async function handleGenerateEditableDocument(currentReference: ReferenceData) {
-    setError("");
-    setCanvaMessage("");
-    setCanvaAiMessage("");
-    setCanvaEditUrl("");
-    setCanvaDesignId("");
-    setCanvaAiTransactionId("");
-    setCanvaAiPreviewUrl("");
-    setEnhancedImageSaved(false);
-    setGeneratedImageSaveMessage("");
-    setIsGeneratingImage(true);
-
-    try {
-      if (selectedApiKeys.length === 0) {
-        throw new Error("Select at least one text-capable API key before applying document changes.");
-      }
-
-      const selectionResponse = await fetch(`${API_BASE_URL}/api/api-keys/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selected_ids: selectedApiKeys }),
-        credentials: "include",
-      });
-      const selectionData = await selectionResponse.json().catch(() => null);
-      if (!selectionResponse.ok) {
-        throw new Error(String(selectionData?.detail || "Unable to synchronize the selected API keys."));
-      }
-
-      const sourceType = currentReference.source === "google-drive"
-        ? "google-drive"
-        : currentReference.source === "input-folder"
-          ? "input-folder"
-          : "upload";
-      const source = currentReference.sourceId || currentReference.url;
-      if (!source || source.startsWith("blob:")) {
-        throw new Error("The selected document reference is not available to the backend.");
-      }
-
-      const formData = new FormData();
-      formData.append("source_type", sourceType);
-      formData.append("source", source.replace(/^drive:/, ""));
-      formData.append("filename", currentReference.name);
-      formData.append("content_type", currentReference.mimeType || "");
-
-      const response = await fetch(`${API_BASE_URL}/api/canva/create-from-reference-document`, {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-      const data = await response.json().catch(() => null);
-
-      if (response.status === 401 && data?.detail) {
-        const authorizationUrl = response.headers.get("X-Canva-Authorization-URL");
-        if (authorizationUrl) {
-          window.open(authorizationUrl, "_blank", "noopener,noreferrer");
-        }
-      }
-      if (!response.ok) {
-        throw new Error(String(data?.detail || "Unable to import the document into Canva."));
-      }
-      if (!data?.design_id || !data?.edit_url) {
-        throw new Error("Canva imported the document but did not return a design ID and edit URL.");
-      }
-
-      setCanvaDesignId(String(data.design_id));
-      setCanvaEditUrl(String(data.edit_url));
-      setCanvaMessage("Document imported into Canva as an editable design. Preparing your requested changes with Canva MCP...");
-      setCanvaAiCommand(templatePrompt.trim());
-
-      // Automatically prepare the exact user-requested changes against the
-      // imported Canva design. The user can review the MCP draft before saving.
-      const editForm = new FormData();
-      editForm.append("design_id", String(data.design_id));
-      editForm.append("command", templatePrompt.trim());
-      const editResponse = await fetch(`${API_BASE_URL}/api/canva/ai-edit/prepare`, {
-        method: "POST",
-        body: editForm,
-        credentials: "include",
-      });
-      const editData = await editResponse.json().catch(() => null);
-      if (!editResponse.ok) {
-        throw new Error(String(editData?.detail || "The document was imported into Canva, but the requested changes could not be prepared."));
-      }
-
-      setCanvaAiTransactionId(String(editData.transaction_id || ""));
-      setCanvaAiPreviewUrl(String(editData.preview_url || ""));
-      setCanvaAiMessage("Your requested changes are prepared as a Canva MCP draft. Review them in Canva, then click Save AI Changes.");
-      setGeneratedImageFilename(`${currentReference.name.replace(/\.[^.]+$/, "")}_enhanced.${currentReference.type === "ppt" || currentReference.type === "pptx" ? "pptx" : "pdf"}`);
-      setGeneratedImageModel("");
-      setGeneratedImageProvider("Canva MCP");
-      window.open(String(data.edit_url), "_blank", "noopener,noreferrer");
-    } catch (err) {
-      console.error("Editable document generation failed:", err);
-      setError(err instanceof Error ? err.message : "Unable to generate the editable document.");
-    } finally {
-      setIsGeneratingImage(false);
-    }
-  }
-
   async function handleGenerateImage() {
 
-    const isDocumentReference = Boolean(
-      reference && ["pdf", "ppt", "pptx"].includes(reference.type),
-    );
-
-    if (!reference || (!isDocumentReference && selectedInputIds.length === 0)) {
-      setError(isDocumentReference ? "Please select a document reference." : "Please select at least one reference image.");
+    if (selectedInputIds.length === 0 || !reference) {
+      setError("Please select at least one reference image.");
       return;
     }
+
 
     if (!templatePrompt.trim()) {
 
@@ -2928,13 +2998,16 @@ function ImageGenerator({
     }
 
 
-    if (reference.type === "video" || reference.type === "youtube") {
-      setError("Video and YouTube references are not supported for this generation flow yet.");
-      return;
-    }
+    if (
+      reference.type === "pdf" ||
+      reference.type === "video" ||
+      reference.type === "youtube"
+    ) {
 
-    if (reference.type === "pdf" || reference.type === "ppt" || reference.type === "pptx") {
-      await handleGenerateEditableDocument(reference);
+      setError(
+        "Image generation currently requires an image reference.",
+      );
+
       return;
     }
 
@@ -2949,72 +3022,15 @@ function ImageGenerator({
     setGeneratedImageSaveMessage("");
     setIsOutputFolderPickerOpen(false);
     setGeneratedTextChanges({});
+    setSocialDescriptions({});
+    setSocialDescriptionError("");
+    setIsSocialDescriptionPreviewOpen(false);
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
     setIsGeneratingImage(true);
 
 
     try {
-
-      // The FastAPI backend keeps API credentials in process memory. The
-      // browser can retain selected API IDs after a backend restart, so never
-      // rely only on the background restore effect. Synchronize the current
-      // selection immediately before image generation.
-      if (selectedApiKeys.length === 0) {
-        throw new Error(
-          "No API key is selected. Select at least one API key before generating an image.",
-        );
-      }
-
-      const apiStatusResponse = await fetch(
-        `${API_BASE_URL}/api/api-keys/status`,
-        { credentials: "include" },
-      );
-      const apiStatus = await apiStatusResponse.json().catch(() => null);
-
-      if (!apiStatusResponse.ok) {
-        throw new Error(
-          String(
-            apiStatus?.detail ||
-              "Unable to verify the selected API keys.",
-          ),
-        );
-      }
-
-      if (!apiStatus?.configured) {
-        throw new Error(
-          "The API key configuration is no longer available on the backend. Please return to API Setup, upload the API key file again, and select the required API key(s).",
-        );
-      }
-
-      const selectionResponse = await fetch(
-        `${API_BASE_URL}/api/api-keys/select`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ selected_ids: selectedApiKeys }),
-          credentials: "include",
-        },
-      );
-      const selectionData = await selectionResponse.json().catch(() => null);
-
-      if (!selectionResponse.ok) {
-        throw new Error(
-          String(
-            selectionData?.detail ||
-              "Unable to synchronize the selected API keys.",
-          ),
-        );
-      }
-
-      const selectedNames = Array.isArray(selectionData?.selected)
-        ? selectionData.selected
-        : [];
-
-      if (selectedNames.length === 0) {
-        throw new Error(
-          "None of the selected API keys are available on the backend. Please return to API Setup and upload the API key file again.",
-        );
-      }
-
 
       const sourceType =
         reference.source ===
@@ -3180,10 +3196,6 @@ function ImageGenerator({
       setGeneratedImageSaved(false);
       setGeneratedImageSaveMessage("");
 
-      setCanvaEditUrl("");
-      setCanvaDesignId("");
-      setCanvaMessage("");
-
       setGeneratedTextChanges(
         data?.changes &&
         typeof data.changes === "object"
@@ -3214,20 +3226,133 @@ function ImageGenerator({
   }
 
 
+  async function handleGenerateSocialDescriptions() {
+    if (!generatedImageFilename) {
+      setSocialDescriptionError("Generate the final image before creating social-media descriptions.");
+      return;
+    }
+
+    setIsGeneratingSocialDescriptions(true);
+    setSocialDescriptionError("");
+    setSocialDescriptionSaved(false);
+    setSocialDescriptionSaveMessage("");
+
+    try {
+      // The backend keeps the description stage separate from image generation
+      // and returns the generated TXT content.  Use the existing endpoint so
+      // the previous image-generation flow remains untouched.
+      const formData = new FormData();
+      formData.append("filename", generatedImageFilename);
+      formData.append("prompt", templatePrompt.trim());
+      formData.append(
+        "template_json",
+        JSON.stringify(templateResult?.template || {}),
+      );
+
+      const response = await fetch(`${API_BASE_URL}/api/social-media/generate`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(data?.detail || "Unable to generate social-media descriptions."));
+      }
+
+      const rawContent = String(data?.content || "").trim();
+      const limits: Record<string, number> = {
+        "[LINKEDIN]": 3000,
+        "[X / TWITTER]": 280,
+        "[FACEBOOK]": 10000,
+        "[INSTAGRAM]": 2200,
+      };
+      const headings = Object.keys(limits);
+      const parsed: Record<string, { text: string; character_count: number; character_limit: number }> = {};
+      headings.forEach((heading, index) => {
+        const start = rawContent.indexOf(heading);
+        if (start < 0) return;
+        const contentStart = start + heading.length;
+        const nextPositions = headings
+          .slice(index + 1)
+          .map((nextHeading) => rawContent.indexOf(nextHeading, contentStart))
+          .filter((position) => position >= 0);
+        const end = nextPositions.length ? Math.min(...nextPositions) : rawContent.length;
+        const text = rawContent.slice(contentStart, end).trim();
+        const platform = heading
+          .replace(/^\[|\]$/g, "")
+          .replace("X / TWITTER", "X / Twitter")
+          .replace("LINKEDIN", "LinkedIn")
+          .replace("FACEBOOK", "Facebook")
+          .replace("INSTAGRAM", "Instagram");
+        parsed[platform] = {
+          text,
+          character_count: text.length,
+          character_limit: limits[heading],
+        };
+      });
+
+      if (!Object.keys(parsed).length) {
+        throw new Error("The selected API did not return recognizable social-media sections.");
+      }
+
+      setSocialDescriptions(parsed);
+      setIsSocialDescriptionPreviewOpen(false);
+    } catch (err) {
+      console.error("Social-media description generation failed:", err);
+      setSocialDescriptionError(
+        err instanceof Error ? err.message : "Unable to generate social-media descriptions.",
+      );
+    } finally {
+      setIsGeneratingSocialDescriptions(false);
+    }
+  }
+
+  async function handleSaveSocialDescriptionsToDrive() {
+    if (!generatedImageFilename || Object.keys(socialDescriptions).length === 0 || isSavingSocialDescriptions) {
+      return;
+    }
+
+    setIsSavingSocialDescriptions(true);
+    setSocialDescriptionError("");
+    setSocialDescriptionSaveMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("filename", `${generatedImageFilename.replace(/\.[^.]+$/, "")}_description.txt`);
+      const response = await fetch(`${API_BASE_URL}/api/social-media/save-to-drive`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(data?.detail || "Unable to save social-media descriptions."));
+      }
+      setSocialDescriptionSaved(true);
+      setSocialDescriptionSaveMessage(
+        String(data?.message || "Social-media descriptions saved to Google Drive / outputs."),
+      );
+    } catch (err) {
+      console.error("Saving social-media descriptions failed:", err);
+      setSocialDescriptionError(
+        err instanceof Error ? err.message : "Unable to save social-media descriptions.",
+      );
+    } finally {
+      setIsSavingSocialDescriptions(false);
+    }
+  }
+
   function getReferencePreviewColumns(count: number): number {
-    // Keep the reference previews readable. Two columns are used for the
-    // first six references so the tiles do not collapse into tiny thumbnails.
     if (count <= 1) return 1;
-    if (count <= 6) return 2;
-    if (count <= 12) return 3;
+    if (count <= 4) return 2;
+    if (count <= 9) return 3;
     return 4;
   }
 
   function getReferencePreviewHeight(count: number): number {
-    // The preview panel controls the actual tile height so every reference
-    // uses the same available grid space. Keep this only as an inline fallback.
     if (count <= 1) return 220;
-    return 120;
+    if (count <= 4) return 170;
+    if (count <= 9) return 135;
+    return 110;
   }
 
 
@@ -3291,16 +3416,6 @@ function ImageGenerator({
     }
 
 
-    if (currentReference.type === "ppt" || currentReference.type === "pptx") {
-      return (
-        <div className="media-preview document-preview">
-          <div className="document-icon powerpoint-document-icon">PPT</div>
-          <div className="document-name">{currentReference.name}</div>
-        </div>
-      );
-    }
-
-
     if (
       currentReference.type ===
       "video"
@@ -3351,210 +3466,6 @@ function ImageGenerator({
    * ------------------------------------------------------------
    */
 
-
-const handleOpenGeneratedImageInCanva = async () => {
-  if (!generatedImageFilename || isCreatingCanvaDesign) return;
-
-  setIsCreatingCanvaDesign(true);
-  setCanvaMessage("");
-
-  try {
-    const statusResponse = await fetch(
-      `${API_BASE_URL}/api/canva/connect/oauth/status`,
-      { credentials: "include" },
-    );
-    const status = await statusResponse.json().catch(() => null);
-
-    if (!statusResponse.ok || !status?.authenticated) {
-      const authResponse = await fetch(
-        `${API_BASE_URL}/api/canva/connect/oauth/start`,
-        { credentials: "include" },
-      );
-      const authData = await authResponse.json().catch(() => null);
-      if (!authResponse.ok || !authData?.authorization_url) {
-        throw new Error(String(authData?.detail || "Unable to start Canva authorization."));
-      }
-
-      window.open(
-        String(authData.authorization_url),
-        "_blank",
-        "noopener,noreferrer",
-      );
-      setCanvaMessage("Canva authorization opened in a new tab. Approve access, return here, and click Open / Edit in Canva again.");
-      return;
-    }
-
-    if (reference && ["pdf", "ppt", "pptx"].includes(reference.type)) {
-      const documentForm = new FormData();
-      documentForm.append("source_type", reference.source === "google-drive" ? "google-drive" : reference.source === "input-folder" ? "input-folder" : "upload");
-      documentForm.append("source", String(reference.sourceId || reference.url).replace(/^drive:/, ""));
-      documentForm.append("filename", reference.name);
-      documentForm.append("content_type", reference.mimeType || "");
-      const documentResponse = await fetch(`${API_BASE_URL}/api/canva/create-from-reference-document`, { method: "POST", body: documentForm, credentials: "include" });
-      const documentData = await documentResponse.json().catch(() => null);
-      if (!documentResponse.ok) throw new Error(String(documentData?.detail || "Unable to import the document into Canva."));
-      setCanvaEditUrl(String(documentData.edit_url || ""));
-      setCanvaDesignId(String(documentData.design_id || ""));
-      setCanvaMessage("Editable document is open in Canva. Use AI Edit below or edit manually in Canva.");
-      window.open(String(documentData.edit_url), "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("filename", generatedImageFilename);
-    formData.append("design_type", "poster");
-
-    const response = await fetch(
-      `${API_BASE_URL}/api/canva/create-from-generated-image`,
-      {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      },
-    );
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(String(data?.detail || "Unable to create the editable Canva design."));
-    }
-
-    if (!data?.edit_url || !data?.design_id) {
-      throw new Error("Canva created the design but did not return the design ID and edit URL.");
-    }
-
-    setCanvaEditUrl(String(data.edit_url));
-    setCanvaDesignId(String(data.design_id));
-    setCanvaAiTransactionId("");
-    setCanvaAiPreviewUrl("");
-    setEnhancedImageSaved(false);
-    setCanvaMessage("Editable Canva design created successfully. You can edit it manually in Canva or use AI Edit below.");
-
-    window.open(String(data.edit_url), "_blank", "noopener,noreferrer");
-  } catch (error) {
-    console.error("Canva design creation failed:", error);
-    setCanvaMessage(error instanceof Error ? error.message : "Unable to create the editable Canva design.");
-  } finally {
-    setIsCreatingCanvaDesign(false);
-  }
-};
-
-const handlePrepareCanvaAiEdit = async () => {
-  if (!canvaDesignId || !canvaAiCommand.trim() || isCanvaAiEditing) return;
-
-  setIsCanvaAiEditing(true);
-  setCanvaAiMessage("");
-  setCanvaAiPreviewUrl("");
-
-  try {
-    const formData = new FormData();
-    formData.append("design_id", canvaDesignId);
-    formData.append("command", canvaAiCommand.trim());
-
-    const response = await fetch(
-      `${API_BASE_URL}/api/canva/ai-edit/prepare`,
-      { method: "POST", body: formData, credentials: "include" },
-    );
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(String(data?.detail || "Unable to prepare the Canva AI edit."));
-    }
-
-    setCanvaAiTransactionId(String(data.transaction_id || ""));
-    setCanvaAiPreviewUrl(String(data.preview_url || ""));
-    setCanvaAiMessage("AI changes are prepared in Canva draft mode. Review the preview, then save them to the Canva design.");
-  } catch (error) {
-    console.error("Canva AI edit failed:", error);
-    setCanvaAiMessage(error instanceof Error ? error.message : "Unable to prepare the Canva AI edit.");
-  } finally {
-    setIsCanvaAiEditing(false);
-  }
-};
-
-const handleCommitCanvaAiEdit = async () => {
-  if (!canvaAiTransactionId || isCanvaAiEditing) return;
-  setIsCanvaAiEditing(true);
-  try {
-    const formData = new FormData();
-    formData.append("transaction_id", canvaAiTransactionId);
-    const response = await fetch(
-      `${API_BASE_URL}/api/canva/ai-edit/commit`,
-      { method: "POST", body: formData, credentials: "include" },
-    );
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(data?.detail || "Unable to save the Canva AI changes."));
-    setCanvaAiTransactionId("");
-    setCanvaAiPreviewUrl("");
-    setCanvaAiMessage(String(data?.message || "AI changes saved to Canva."));
-    setEnhancedImageSaved(false);
-  } catch (error) {
-    setCanvaAiMessage(error instanceof Error ? error.message : "Unable to save the Canva AI changes.");
-  } finally {
-    setIsCanvaAiEditing(false);
-  }
-};
-
-const handleCancelCanvaAiEdit = async () => {
-  if (!canvaAiTransactionId) return;
-  try {
-    const formData = new FormData();
-    formData.append("transaction_id", canvaAiTransactionId);
-    await fetch(
-      `${API_BASE_URL}/api/canva/ai-edit/cancel`,
-      { method: "POST", body: formData, credentials: "include" },
-    );
-  } finally {
-    setCanvaAiTransactionId("");
-    setCanvaAiPreviewUrl("");
-    setCanvaAiMessage("AI draft changes cancelled.");
-  }
-};
-
-const handleSaveEnhancedCanvaToDrive = async () => {
-  if (!canvaDesignId || isSavingEnhancedToDrive) return;
-
-  if (!isOutputFolderPickerOpen) {
-    if (driveOutputFolders.length === 0) await loadDriveOutputFolders();
-    setOutputSaveMode("enhanced");
-    setGeneratedImageSaveMessage("");
-    setIsOutputFolderPickerOpen(true);
-    return;
-  }
-
-  if (!selectedOutputFolderId) {
-    setGeneratedImageSaveMessage("Select a Google Drive output folder before saving the enhanced image.");
-    return;
-  }
-
-  setIsSavingEnhancedToDrive(true);
-  setGeneratedImageSaveMessage("");
-  try {
-    const formData = new FormData();
-    formData.append("design_id", canvaDesignId);
-    formData.append("folder_id", selectedOutputFolderId);
-    formData.append("filename", generatedImageFilename || "enhanced-image.png");
-    const isDocument = Boolean(reference && ["pdf", "ppt", "pptx"].includes(reference.type));
-    formData.append("file_format", isDocument ? (reference?.type === "pdf" ? "pdf" : "pptx") : "png");
-
-    const response = await fetch(
-      `${API_BASE_URL}/api/canva/export-to-drive`,
-      { method: "POST", body: formData, credentials: "include" },
-    );
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(data?.detail || "Unable to save the final Canva file to Google Drive."));
-
-    setEnhancedImageSaved(true);
-    setGeneratedImageSaveMessage(String(data?.message || "Enhanced image saved to Google Drive / outputs."));
-    setIsOutputFolderPickerOpen(false);
-  } catch (error) {
-    setEnhancedImageSaved(false);
-    setGeneratedImageSaveMessage(error instanceof Error ? error.message : "Unable to save the enhanced Canva image.");
-  } finally {
-    setIsSavingEnhancedToDrive(false);
-  }
-};
-
   const handleSaveGeneratedImageToDrive = async () => {
     if (!generatedImageFilename || isSavingGeneratedImage) return;
 
@@ -3564,7 +3475,6 @@ const handleSaveEnhancedCanvaToDrive = async () => {
       if (driveOutputFolders.length === 0) {
         await loadDriveOutputFolders();
       }
-      setOutputSaveMode("generated");
       setGeneratedImageSaveMessage("");
       setIsOutputFolderPickerOpen(true);
       return;
@@ -5216,6 +5126,89 @@ const handleSaveEnhancedCanvaToDrive = async () => {
             </div>
 
 
+            {false && templateResult && (
+              <div className="generated-output-meta" style={{ marginTop: "16px" }}>
+                <span>API Provider</span>
+                <strong>{templateApiProvider || "Selected API"}</strong>
+                <span>Model</span>
+                <strong>{templateApiModel || "Provider model"}</strong>
+              </div>
+            )}
+
+
+            {false && templateResult && (
+              <div className="template-editable-section">
+
+                <div className="template-structure-heading">
+                  <div>
+                    <span className="template-section-number">
+                      04
+                    </span>
+                    <strong>
+                      Editable Text Groups
+                    </strong>
+                  </div>
+
+                  <span>
+                    Existing text regions that can be replaced
+                  </span>
+                </div>
+
+                {templateResult.template.text_groups &&
+                templateResult.template.text_groups.length > 0 ? (
+                  <div className="editable-text-list">
+                    {(Array.isArray(templateResult.template.text_groups) ? templateResult.template.text_groups : []).map((group) => (
+                      <div
+                        key={group.id}
+                        className="editable-text-item"
+                      >
+                        <div
+                          className="editable-text-swatch"
+                          style={{
+                            backgroundColor:
+                              group.lines?.[0]?.color ||
+                              "#FFFFFF",
+                          }}
+                        />
+                        <div className="editable-text-copy">
+                          <strong>{group.text}</strong>
+                          <span>
+                            {group.role} · {group.line_count} line{group.line_count === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : templateResult.template.text_elements &&
+                  templateResult.template.text_elements.length > 0 ? (
+                  <div className="editable-text-list">
+                    {(Array.isArray(templateResult.template.text_elements) ? templateResult.template.text_elements : []).map((element) => (
+                      <div
+                        key={element.id}
+                        className="editable-text-item"
+                      >
+                        <div
+                          className="editable-text-swatch"
+                          style={{ backgroundColor: element.color }}
+                        />
+                        <div className="editable-text-copy">
+                          <strong>{element.text}</strong>
+                          <span>
+                            {element.id} · {element.width} × {element.height}px
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="editable-text-empty">
+                    No editable text regions were detected. Make sure Gemini is configured and regenerate the template.
+                  </div>
+                )}
+
+              </div>
+            )}
+
 
             <div className="template-prompt-area">
 
@@ -5483,12 +5476,8 @@ const handleSaveEnhancedCanvaToDrive = async () => {
               }
             >
               {isGeneratingImage
-                ? reference && ["pdf", "ppt", "pptx"].includes(reference.type)
-                  ? "Importing & Applying Changes..."
-                  : "Generating Image..."
-                : reference && ["pdf", "ppt", "pptx"].includes(reference.type)
-                  ? "Generate Editable Document"
-                  : "Generate Image"}
+                ? "Generating Image..."
+                : "Generate Image"}
             </button>
 
 
@@ -5574,9 +5563,9 @@ const handleSaveEnhancedCanvaToDrive = async () => {
                 </h3>
 
                 <p>
-                  The selected reference images are synthesized into one
-                  coherent output. Their requested visual features are
-                  combined rather than rendered as a collage.
+                  The original reference remains the visual base.
+                  Only the requested editable text/content is replaced
+                  using the generated template.
                 </p>
 
 
@@ -5635,119 +5624,7 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 
                 )}
 
-                
-<div
-  style={{
-    display: "flex",
-    gap: "10px",
-    flexWrap: "wrap",
-    marginTop: "16px",
-  }}
->
-  <button
-    type="button"
-    className="secondary-button"
-    onClick={handleOpenGeneratedImageInCanva}
-    disabled={isCreatingCanvaDesign}
-  >
-    {isCreatingCanvaDesign
-      ? "Opening Canva..."
-      : "Open / Edit in Canva"}
-  </button>
-</div>
-
-{canvaDesignId && (
-  <div style={{ marginTop: "16px", padding: "14px", borderRadius: "12px", border: "1px solid rgba(120,100,255,0.28)", background: "rgba(255,255,255,0.025)" }}>
-    <div style={{ fontWeight: 800, marginBottom: "8px" }}>AI Edit in Canva</div>
-    <textarea
-      value={canvaAiCommand}
-      onChange={(event) => setCanvaAiCommand(event.target.value)}
-      placeholder='Example: Change the title to "AI Image Generation Workshop" and make it larger.'
-      disabled={isCanvaAiEditing || Boolean(canvaAiTransactionId)}
-      rows={3}
-      style={{ width: "100%", resize: "vertical", padding: "10px 12px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.05)", color: "inherit", font: "inherit" }}
-    />
-    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
-      {!canvaAiTransactionId ? (
-        <button type="button" className="secondary-button" onClick={handlePrepareCanvaAiEdit} disabled={isCanvaAiEditing || !canvaAiCommand.trim()}>
-          {isCanvaAiEditing ? "Preparing AI Edit..." : "Apply AI Edit"}
-        </button>
-      ) : (
-        <>
-          <button type="button" className="primary-button" onClick={handleCommitCanvaAiEdit} disabled={isCanvaAiEditing}>
-            {isCanvaAiEditing ? "Saving..." : "Save AI Changes"}
-          </button>
-          <button type="button" className="secondary-button" onClick={handleCancelCanvaAiEdit} disabled={isCanvaAiEditing}>
-            Cancel AI Changes
-          </button>
-        </>
-      )}
-    </div>
-    {canvaAiPreviewUrl && (
-      <a href={canvaAiPreviewUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: "8px", fontWeight: 700 }}>
-        Open AI edit preview
-      </a>
-    )}
-    {canvaAiMessage && <p style={{ margin: "8px 0 0", opacity: 0.82 }}>{canvaAiMessage}</p>}
-  </div>
-)}
-
-{canvaDesignId && (
-  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "12px" }}>
-    <button type="button" className="primary-button" onClick={handleSaveEnhancedCanvaToDrive} disabled={isSavingEnhancedToDrive}>
-      {isSavingEnhancedToDrive
-        ? "Saving Final File..."
-        : enhancedImageSaved
-          ? "Final File Saved to Drive"
-          : reference && reference.type === "pdf"
-            ? "Save Final PDF to Drive"
-            : reference && (reference.type === "ppt" || reference.type === "pptx")
-              ? "Save Final PPTX to Drive"
-              : "Save Final Enhanced Image to Drive"}
-    </button>
-  </div>
-)}
-
-{canvaMessage && (
-  <div
-    style={{
-      marginTop: "10px",
-      padding: "10px 12px",
-      borderRadius: "10px",
-      border: "1px solid rgba(120, 100, 255, 0.25)",
-      background: "rgba(120, 100, 255, 0.07)",
-    }}
-  >
-    <p style={{ margin: 0 }}>{canvaMessage}</p>
-    {canvaEditUrl && (
-      <a
-        href={canvaEditUrl}
-        target="_blank"
-        rel="noreferrer"
-        style={{
-          display: "inline-block",
-          marginTop: "7px",
-          fontWeight: 700,
-        }}
-      >
-        Reopen editable Canva design
-      </a>
-    )}
-    {canvaDesignId && (
-      <small
-        style={{
-          display: "block",
-          marginTop: "5px",
-          opacity: 0.65,
-        }}
-      >
-        Canva design: {canvaDesignId}
-      </small>
-    )}
-  </div>
-)}
-
-                {isOutputFolderPickerOpen && (
+                                {isOutputFolderPickerOpen && (
                   <div
                     style={{
                       marginTop: "16px",
@@ -5824,26 +5701,18 @@ const handleSaveEnhancedCanvaToDrive = async () => {
                           <button
                             type="button"
                             className="primary-button"
-                            onClick={
-                              outputSaveMode === "enhanced"
-                                ? handleSaveEnhancedCanvaToDrive
-                                : handleSaveGeneratedImageToDrive
-                            }
+                            onClick={handleSaveGeneratedImageToDrive}
                             disabled={
                               isSavingGeneratedImage ||
-                              isSavingEnhancedToDrive ||
-                              (outputSaveMode === "generated" && generatedImageSaved) ||
-                              (outputSaveMode === "enhanced" && enhancedImageSaved) ||
+                              generatedImageSaved ||
                               !selectedOutputFolderId
                             }
                           >
-                            {isSavingGeneratedImage || isSavingEnhancedToDrive
+                            {isSavingGeneratedImage
                               ? "Saving..."
-                              : outputSaveMode === "enhanced" && enhancedImageSaved
-                                ? "Enhanced Image Saved to Google Drive / outputs"
-                                : outputSaveMode === "generated" && generatedImageSaved
-                                  ? "Saved to Google Drive / outputs"
-                                  : "Confirm Save"}
+                              : generatedImageSaved
+                                ? "Saved to Google Drive / outputs"
+                                : "Confirm Save"}
                           </button>
 
                           {!isSavingGeneratedImage && !generatedImageSaved && (
@@ -5902,6 +5771,78 @@ const handleSaveEnhancedCanvaToDrive = async () => {
                   </p>
                 )}
 
+
+                {/* ======================================================
+                    SOCIAL MEDIA DESCRIPTION — post-image stage only
+                    ====================================================== */}
+                <div className="social-description-section">
+                  <div className="social-description-header">
+                    <div>
+                      <span className="social-description-kicker">NEXT STEP</span>
+                      <h3>Social Media Descriptions</h3>
+                      <p>
+                        Generate platform-specific post text from the final image. Each description is kept within the configured platform character limit.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="social-description-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleGenerateSocialDescriptions}
+                      disabled={isGeneratingSocialDescriptions}
+                    >
+                      {isGeneratingSocialDescriptions ? "Generating Descriptions..." : "Generate Description"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setIsSocialDescriptionPreviewOpen(true)}
+                      disabled={Object.keys(socialDescriptions).length === 0}
+                    >
+                      Preview
+                    </button>
+
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleSaveSocialDescriptionsToDrive}
+                      disabled={
+                        Object.keys(socialDescriptions).length === 0 ||
+                        isSavingSocialDescriptions ||
+                        socialDescriptionSaved
+                      }
+                    >
+                      {isSavingSocialDescriptions
+                        ? "Saving..."
+                        : socialDescriptionSaved
+                          ? "Saved to Google Drive / outputs"
+                          : "Save Description"}
+                    </button>
+                  </div>
+
+                  {socialDescriptionError && (
+                    <p className="social-description-error">{socialDescriptionError}</p>
+                  )}
+
+                  {socialDescriptionSaveMessage && (
+                    <p className="social-description-success">{socialDescriptionSaveMessage}</p>
+                  )}
+
+                  {Object.keys(socialDescriptions).length > 0 && (
+                    <div className="social-description-summary">
+                      {Object.entries(socialDescriptions).map(([platform, item]) => (
+                        <div className="social-description-summary-item" key={platform}>
+                          <strong>{platform}</strong>
+                          <span>{item.character_count} / {item.character_limit} characters</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
               </div>
 
             </div>
@@ -5937,6 +5878,44 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 
       </main>
 
+
+      {isSocialDescriptionPreviewOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => setIsSocialDescriptionPreviewOpen(false)}
+        >
+          <div
+            className="social-description-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <div className="section-kicker">PREVIEW</div>
+                <h2>Social Media Descriptions</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setIsSocialDescriptionPreviewOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="social-description-preview-list">
+              {Object.entries(socialDescriptions).map(([platform, item]) => (
+                <article className="social-description-preview-card" key={platform}>
+                  <div className="social-description-preview-heading">
+                    <strong>{platform}</strong>
+                    <span>{item.character_count} / {item.character_limit} characters</span>
+                  </div>
+                  <p>{item.text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================
           REFERENCE MODAL
@@ -6017,7 +5996,7 @@ const handleSaveEnhancedCanvaToDrive = async () => {
 
                   <small>
                     PNG, JPG, WEBP, GIF,
-                    PDF, PPT, PPTX, MP4 and more
+                    PDF, MP4 and more
                   </small>
 
                 </span>
@@ -6118,8 +6097,6 @@ const handleSaveEnhancedCanvaToDrive = async () => {
                 image/webp,
                 image/gif,
                 application/pdf,
-                application/vnd.ms-powerpoint,
-                application/vnd.openxmlformats-officedocument.presentationml.presentation,
                 video/mp4,
                 video/webm,
                 video/quicktime
@@ -6533,64 +6510,6 @@ function App() {
   const showImageGenerator =
     currentPath === "/image-generator" && apiSetupComplete;
 
-  // Rehydrate the backend's in-memory API selection after a backend restart.
-  // The browser session can retain selectedApiKeys even though FastAPI has
-  // reset its process state. Synchronizing here makes all AI endpoints
-  // (tagging, templates, prompts and image generation) use the same selection.
-  useEffect(() => {
-    if (!apiSetupComplete || selectedApiKeys.length === 0) return;
-
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const statusResponse = await fetch(
-          `${API_BASE_URL}/api/api-keys/status`,
-          { credentials: "include" },
-        );
-        const statusData = await statusResponse.json().catch(() => null);
-
-        if (!statusResponse.ok) {
-          throw new Error(
-            String(statusData?.detail || "Unable to read API key status."),
-          );
-        }
-
-        if (!statusData?.configured) {
-          if (!cancelled) {
-            setSelectedApiKeys([]);
-            setSelectedApiServices([]);
-            setAvailableApiServices([]);
-            setApiSetupComplete(false);
-          }
-          return;
-        }
-
-        const response = await fetch(`${API_BASE_URL}/api/api-keys/select`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ selected_ids: selectedApiKeys }),
-          credentials: "include",
-        });
-        const data = await response.json().catch(() => null);
-
-        if (!response.ok) {
-          throw new Error(
-            String(data?.detail || "Unable to restore API selection."),
-          );
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("API selection restore failed:", error);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiSetupComplete, selectedApiKeys.join("|")]);
-
   useEffect(() => {
     writeAppSession({
       apiSetupComplete,
@@ -6647,7 +6566,7 @@ function App() {
             const availableIds = new Set(
               selectedServices.map((service) => service.id),
             );
-            const validSelectedIds = selectedKeys.filter((id) =>
+            const validSelectedIds = selectedApiKeys.filter((id) =>
               availableIds.has(id),
             );
 
