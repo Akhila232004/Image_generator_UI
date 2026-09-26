@@ -52,28 +52,31 @@ The application queries Google Drive for files contained in this folder and uses
 
 The main generation workflow is:
 
-Reference Image
-       |
-       v
-Image Analysis / Tagging
-       |
-       v
-Template Generation
-       |
-       v
-Prompt Generation
-       |
-       v
-AI Image Generation
-       |
-       v
-Generated Image
-       |
-       v
-Save Output
-       |
-       v
-Google Drive Output Folder
+Also, I recommend using **quoted labels** instead of underscores if you want the rendered diagram to look professional:
+
+```mermaid
+flowchart TD
+    Home["Home"] --> API["API Key Configuration"]
+    API --> Upload["Upload API Key File"]
+    Upload --> Display["Display Available AI API Keys"]
+    Display --> Continue["Continue to Image Generator"]
+    Continue --> Select["Select / Deselect AI API Keys"]
+    Select --> Load["Load Reference Images"]
+
+    Load --> Drive["Google Drive"]
+    Load --> External["External Upload"]
+
+    Drive --> References["Select Reference Images"]
+    External --> References
+
+    References --> Analyze["Analyze / Tag References"]
+    Analyze --> Template["Generate Template"]
+    Template --> Prompt["Generate Prompt"]
+    Prompt --> Image["Generate Image"]
+    Image --> Preview["Preview Generated Image"]
+    Preview --> Save["Save"]
+    Save --> Output["Google Drive Output Folder"]
+```
 
 ### AI Image Tagging
 
