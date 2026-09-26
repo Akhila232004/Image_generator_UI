@@ -134,19 +134,13 @@ Multiple keys can be selected simultaneously.
 The selected keys are used by the backend according to their capabilities.
 #### Pipeline Example
 A selected API configuration may allow:
-
-Free/Text-capable API
-        |
-        +--> Template generation
-        |
-        +--> Prompt generation
-
-Image-capable API
-        |
-        +--> Final image generation
-
+```mermaid
+flowchart TD
+    s1["Free/Text-capable API"] --> B["Template generation"]
+    s1 --> C["Prompt generation"]
+    D["Image-capable API"] --> E["Final image generation"]
+```
 If the currently selected image-generation provider cannot generate the final image, another selected compatible provider can be used.
-
 The application also supports changing the selected API keys without restarting the complete workflow.
 ### Google Drive Integration
 Google Drive is used for reference images and generated-output storage.
@@ -182,19 +176,26 @@ The output folder is used for storing generated images.
 Generated images are saved into the configured Google Drive output folder.
 
 The intended folder structure is:
-
-Google Drive
-│
-└── Reference Folder
-    │
-    ├── reference-image-1.png
-    ├── reference-image-2.jpg
-    ├── reference-image-3.png
-    │
-    └── outputs
-        ├── generated-image-1.png
-        ├── generated-image-2.png
-        └── generated-image-3.png
+```mermaid
+flowchart TD
+    Google_Drive["Google Drive"]
+    Reference_Folder["Reference Folder"]
+    reference_image_1["reference-image-1.png"]
+    reference_image_2["reference-image-2.jpg"]
+    reference_image_3["reference-image-3.png"]
+    outputs["outputs"]
+    generated_image_1["generated-image-1.png"]
+    generated_image_2["generated-image-2.png"]
+    generated_image_3["generated-image-3.png"]
+    Google_Drive --> Reference_Folder
+    Reference_Folder --> reference_image_1
+    Reference_Folder --> reference_image_2
+    Reference_Folder --> reference_image_3
+    Reference_Folder --> outputs
+    outputs --> generated_image_1
+    outputs --> generated_image_2
+    outputs --> generated_image_3
+```
 
 The application can save generated images after the user selects the save operation.
 ### Backend
@@ -215,27 +216,23 @@ Main application:
 backend/app/main.py
 ### Backend Structure
 A simplified structure is:
-
-backend/
-│
-├── app/
-│   ├── main.py
-│   │
-│   ├── services/
-│   │   ├── prompt_generator.py
-│   │   ├── template_builder.py
-│   │   ├── document_reference_service.py
-│   │   ├── editable_design_service.py
-│   │   ├── canva_mcp_service.py
-│   │   └── canva_connect_service.py
-│   │
-│   ├── input/
-│   ├── uploads/
-│   ├── templates/
-│   └── output/
-│
-├── requirements.txt
-└── ...
+```mermaid
+flowchart TD
+    backend-->app
+    app-->main.py
+    app-->services
+    services-->prompt_generator.py
+    services-->template_builder.py
+    services-->document_reference_service.py
+    services-->editable_design_service.py
+    services-->canva_mcp_service.py
+    services-->canva_connect_service.py
+    app-->input
+    app-->uploads
+    app-->templates
+    app-->output
+    requirements_txt["requirements.txt"]
+````
 ### Frontend
 The frontend is implemented using:
 
@@ -247,17 +244,17 @@ The frontend communicates with the FastAPI backend through REST APIs.
 
 Typical structure:
 
-frontend/
-│
-├── src/
-│   ├── App.tsx
-│   ├── App.css
-│   │
-│   ├── components/
-│   └── services/
-│
-├── package.json
-└── vite.config.ts
+```mermaid
+graph TD
+    A["frontend/"]
+    A --> B["src/"]
+    B --> C["App.tsx"]
+    B --> D["App.css"]
+    A --> E["components/"]
+    A --> F["services/"]
+    A --> G["package.json"]
+    A --> H["vite.config.ts"]
+```
 ### API Key Configuration
 The application accepts an API-key configuration file.
 
